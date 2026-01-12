@@ -28,7 +28,11 @@ from typing import Dict, List, Tuple, Optional
 import warnings
 from dataclasses import dataclass
 import os
-
+import sys
+import os
+# Import label generation from preprocessing pipeline
+sys.path.append(os.path.dirname(__file__))
+from libs_preprocessing import generate_nutrient_labels, generate_contaminant_labels
 warnings.filterwarnings('ignore')
 
 
@@ -515,42 +519,63 @@ def calculate_stopband_attenuation(original: np.ndarray, filtered: np.ndarray) -
 def compare_filters(
     spectra:  np.ndarray,
     wavelengths: np.ndarray,
+    sample_names: np.ndarray,  # NEW: Add sample names
+    objective:  str = 'nutrient',  # NEW: 'nutrient' or 'contaminant'
     verbose: bool = True
 ) -> Dict[str, FilterMetrics]:
     """
-    Comprehensive comparison of smoothing filters using SPECTRAL QUALITY METRICS ONLY.
+    Comprehensive comparison with CLASSIFICATION ACCURACY evaluation.
     
-    No classification required - compares filters based on: 
-    - Noise reduction (%)
-    - Peak preservation (%)
-    - SNR improvement (%)
-    - Stopband attenuation (dB) - Key metric from Schmid 2022 [233]
-    - Computation time (ms)
+    NEW: Now includes classification metrics using auto-generated labels.
     
     Parameters
     ----------
-    spectra : np. ndarray
+    spectra :  np.ndarray
         Baseline-corrected spectra (n_samples, n_features)
     wavelengths : np.ndarray
         Wavelength values
+    sample_names : np.ndarray
+        Sample identifiers for label generation
+    objective : str
+        'nutrient' (NPK classification) or 'contaminant' (detection)
     verbose : bool
         Print progress
         
     Returns
     -------
     results : Dict[str, FilterMetrics]
-        Metrics for each filter method
+        Metrics INCLUDING classification accuracy
     """
     import time
     
-    # Filter configurations to test
+    # NEW: Generate labels based on objective
+    if objective == 'nutrient':
+        labels_raw = generate_nutrient_labels(sample_names)
+        # Filter out excluded samples (-1)
+        valid_mask = labels_raw != -1
+        spectra = spectra[valid_mask]
+        labels = labels_raw[valid_mask]
+        print(f"\nObjective:  Nutrient Classification (High/Med/Low)")
+        print(f"Usable samples: {len(labels)} (excluded {np.sum(~valid_mask)} contaminated)")
+    elif objective == 'contaminant':
+        labels = generate_contaminant_labels(sample_names)
+        print(f"\nObjective:  Contaminant Detection (Clean/Contaminated)")
+        print(f"Total samples: {len(labels)}")
+    else:
+        raise ValueError(f"Unknown objective: {objective}. Use 'nutrient' or 'contaminant'")
+    
+    # Encode labels for classification
+    le = LabelEncoder()
+    y_encoded = le.fit_transform(labels)
+    
+    # Filter configurations (same as before)
     filter_configs = {
         'SG_w7_o2': lambda x: savitzky_golay(x, window=7, order=2),
-        'SG_w11_o3': lambda x: savitzky_golay(x, window=11, order=3),  # Default
+        'SG_w11_o3': lambda x: savitzky_golay(x, window=11, order=3),
         'SG_w15_o3': lambda x: savitzky_golay(x, window=15, order=3),
         'SG_w21_o4': lambda x: savitzky_golay(x, window=21, order=4),
-        'MS_fc0. 05_M11': lambda x: modified_sinc(x, fc=0.05, M=11),
-        'MS_fc0.10_M11': lambda x: modified_sinc(x, fc=0.10, M=11),  # Default
+        'MS_fc0. 05_M11':  lambda x: modified_sinc(x, fc=0.05, M=11),
+        'MS_fc0.10_M11': lambda x: modified_sinc(x, fc=0.10, M=11),
         'MS_fc0.10_M15': lambda x: modified_sinc(x, fc=0.10, M=15),
         'MS_fc0.15_M11': lambda x: modified_sinc(x, fc=0.15, M=11),
         'MS_Hamming_fc0.10':  lambda x: modified_sinc_hamming(x, fc=0.10, M=11),
@@ -564,28 +589,26 @@ def compare_filters(
     
     if verbose:
         print("\n" + "="*70)
-        print("SMOOTHING FILTER COMPARISON (Spectral Quality Metrics)")
-        print("Methodology: Schmid 2022 [233] - Comparing SG vs Modified Sinc")
+        print("SMOOTHING FILTER COMPARISON (WITH CLASSIFICATION)")
+        print("Methodology:  Schmid 2022 [233] + Classification Validation")
         print("="*70)
-        print("\nNote: Classification disabled - using spectral quality only")
-        print("      (Provide label_map. csv for classification-based comparison)\n")
     
     for name, filter_func in filter_configs.items():
         if verbose:
-            print(f"Evaluating:  {name}...")
+            print(f"\nEvaluating:  {name}...")
         
-        # Apply filter to all spectra
+        # Apply filter
         start_time = time.time()
         filtered = np.apply_along_axis(filter_func, axis=1, arr=spectra)
-        comp_time = (time.time() - start_time) / n_samples * 1000  # ms per spectrum
+        comp_time = (time.time() - start_time) / n_samples * 1000
         
-        # Calculate metrics on representative samples
+        # Spectral quality metrics (same as before)
         noise_reductions = []
         peak_preservations = []
         snr_improvements = []
         attenuations = []
         
-        for i in range(min(50, n_samples)):  # Sample 50 spectra
+        for i in range(min(50, n_samples)):
             orig = spectra[i]
             filt = filtered[i]
             
@@ -599,23 +622,35 @@ def compare_filters(
             
             attenuations.append(calculate_stopband_attenuation(orig, filt))
         
+        # NEW: Classification accuracy evaluation
+        filtered_norm = normalize(filtered, norm='l2', axis=1)
+        
+        # Use Random Forest (as per methodology [302]:  94.9%, 128KB)
+        rf = RandomForestClassifier(
+            n_estimators=100, 
+            max_depth=8, 
+            random_state=42, 
+            n_jobs=-1
+        )
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        cv_scores = cross_val_score(rf, filtered_norm, y_encoded, cv=cv, scoring='accuracy')
+        
         results[name] = FilterMetrics(
             name=name,
             noise_reduction_pct=np.mean(noise_reductions),
             peak_preservation_pct=np.mean(peak_preservations),
             snr_improvement_pct=np.mean(snr_improvements) if snr_improvements else 0,
             frequency_attenuation_db=np.mean(attenuations),
-            classification_accuracy=0.0,  # Not applicable without labels
+            classification_accuracy=np.mean(cv_scores) * 100,  # NOW POPULATED
             computation_time_ms=comp_time
         )
         
         if verbose:
             m = results[name]
-            print(f"  Noise Reduction:     {m.noise_reduction_pct:+.1f}%")
-            print(f"  Peak Preservation:  {m.peak_preservation_pct:.1f}%")
-            print(f"  SNR Improvement:    {m.snr_improvement_pct:+.1f}%")
-            print(f"  Stopband Atten.:     {m.frequency_attenuation_db:.1f} dB")
-            print(f"  Computation Time:   {m.computation_time_ms:.3f} ms")
+            print(f"  Noise Reduction:      {m.noise_reduction_pct: +.1f}%")
+            print(f"  Peak Preservation:  {m.peak_preservation_pct:. 1f}%")
+            print(f"  Stopband Atten.:      {m.frequency_attenuation_db:.1f} dB")
+            print(f"  Classification:       {m.classification_accuracy:. 2f}%  ← VALIDATED")
     
     return results
 
@@ -718,66 +753,15 @@ def generate_recommendation(results: Dict[str, FilterMetrics]) -> Tuple[str, str
     return recommended, "\n".join(justification_parts)
 
 def plot_filter_comparison(
-    spectrum:  np.ndarray,
+    spectrum: np.ndarray,
     wavelengths: np.ndarray,
     results: Dict[str, FilterMetrics],
-    recommended:  str,
+    recommended: str,
     save_path: str = None
 ) -> None:
     """Visualize filter comparison results (spectral quality metrics only)."""
     
-    # Changed to 2x2 layout with 3 active plots (removed classification chart)
-    fig = plt.figure(figsize=(16, 10))
-    
-    # Plot 1: Spectral comparison of best filters
-    ax1 = fig. add_subplot(2, 2, 1)
-    ax1.plot(wavelengths, spectrum, 'k-', alpha=0.3, linewidth=0.5, label='Original')
-    
-    colors = {'SG': 'blue', 'MS': 'red', 'Gaussian': 'green'}
-    for name in ['SG_w11_o3', 'MS_fc0. 10_M11', 'Gaussian_s1. 5']: 
-        if name. startswith('SG'):
-            filtered = savitzky_golay(spectrum, 11, 3)
-            c = colors['SG']
-        elif name. startswith('MS'):
-            filtered = modified_sinc(spectrum, 0.10, 11)
-            c = colors['MS']
-        else:
-            filtered = gaussian_filter(spectrum, 1.5)
-            c = colors['Gaussian']
-        
-        ax1.plot(wavelengths, filtered, color=c, linewidth=1,
-                label=f'{name}', alpha=0.8)
-    
-    ax1.set_xlabel('Wavelength (nm)', fontsize=11)
-    ax1.set_ylabel('Intensity', fontsize=11)
-    ax1.set_title('Spectral Comparison (Default Parameters)', fontsize=12, fontweight='bold')
-    ax1.legend(loc='upper right')
-    ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: Frequency domain comparison
-    ax2 = fig.add_subplot(2, 2, 2)
-    n = len(spectrum)
-    freqs = fftfreq(n, d=1)[: n//2]
-    
-    fft_orig = np.abs(fft(spectrum))[:n//2]
-    fft_sg = np.abs(fft(savitzky_golay(spectrum, 11, 3)))[:n//2]
-    fft_ms = np.abs(fft(modified_sinc(spectrum, 0.10, 11)))[:n//2]
-    
-    ax2.semilogy(freqs, fft_orig, 'k-', alpha=0.3, label='Original', linewidth=0.8)
-    ax2.semilogy(freqs, fft_sg, 'b-', label='SG_w11_o3', alpha=0.8, linewidth=1.2)
-    ax2.semilogy(freqs, fft_ms, 'r-', label='MS_fc0.10_M11', alpha=0.8, linewidth=1.2)
-    ax2.axvline(x=0.1, color='gray', linestyle='--', alpha=0.7, label='Cutoff (fc=0.1)')
-    
-    ax2.set_xlabel('Normalized Frequency', fontsize=11)
-    ax2.set_ylabel('Magnitude (log scale)', fontsize=11)
-    ax2.set_title('Frequency Response (Stopband Attenuation)', fontsize=12, fontweight='bold')
-    ax2.legend(loc='upper right')
-    ax2.grid(True, alpha=0.3, which='both')
-    
-    # Plot 3: Spectral Quality Metrics Comparison (replaces classification chart)
-    ax3 = fig.add_subplot(2, 2, 3)
-    
-    # Select top 6 filters by overall quality score
+    # Calculate scores to determine actual top 3
     scores = {}
     for name, m in results.items():
         score = (
@@ -788,16 +772,102 @@ def plot_filter_comparison(
         )
         scores[name] = score
     
-    # Get top 6 filters
+    # Get actual top 3 filters
+    top_3 = sorted(scores.items(), key=lambda x: -x[1])[:3]
+    top_3_names = [f[0] for f in top_3]
+    
+    print(f"\n✓ Top 3 filters identified: {top_3_names}")
+    
+    fig = plt.figure(figsize=(16, 10))
+    
+    # Plot 1: Spectral comparison of TOP 3 filters
+    ax1 = fig.add_subplot(2, 2, 1)
+    ax1.plot(wavelengths, spectrum, 'k-', alpha=0.3, linewidth=0.5, label='Original')
+    
+    colors = ['blue', 'red', 'green']
+    
+    for i, name in enumerate(top_3_names):
+        if name.startswith('SG'):
+            params = name.replace('SG_w', '').replace('_o', ' ').split()
+            window = int(params[0])
+            order = int(params[1])
+            filtered = savitzky_golay(spectrum, window, order)
+        elif name.startswith('MS'):
+            if 'Hamming' in name:
+                fc_str = name.replace('MS_Hamming_fc', '')
+                fc = float(fc_str)
+                filtered = modified_sinc_hamming(spectrum, fc, 11)
+            else:
+                params = name.replace('MS_fc', '').replace('_M', ' ').split()
+                fc = float(params[0])
+                M = int(params[1]) if len(params) > 1 else 11
+                filtered = modified_sinc(spectrum, fc, M)
+        else:  # Gaussian
+            sigma_str = name.replace('Gaussian_s', '')
+            sigma = float(sigma_str)
+            filtered = gaussian_filter(spectrum, sigma)
+        
+        ax1.plot(wavelengths, filtered, color=colors[i], linewidth=1.2,
+                label=f'{name} (Rank #{i+1})', alpha=0.8)
+    
+    ax1.set_xlabel('Wavelength (nm)', fontsize=11)
+    ax1.set_ylabel('Intensity', fontsize=11)
+    ax1.set_title('Spectral Comparison (Top 3 Filters)', fontsize=12, fontweight='bold')
+    ax1.legend(loc='upper right')
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Frequency domain comparison
+    ax2 = fig.add_subplot(2, 2, 2)
+    n = len(spectrum)
+    freqs = fftfreq(n, d=1)[:n//2]
+    
+    fft_orig = np.abs(fft(spectrum))[:n//2]
+    ax2.semilogy(freqs, fft_orig, 'k-', alpha=0.3, label='Original', linewidth=0.8)
+    
+    for i, name in enumerate(top_3_names):
+        if name.startswith('SG'):
+            params = name.replace('SG_w', '').replace('_o', ' ').split()
+            window = int(params[0])
+            order = int(params[1])
+            filtered = savitzky_golay(spectrum, window, order)
+        elif name.startswith('MS'):
+            if 'Hamming' in name:
+                fc_str = name.replace('MS_Hamming_fc', '')
+                fc = float(fc_str)
+                filtered = modified_sinc_hamming(spectrum, fc, 11)
+            else:
+                params = name.replace('MS_fc', '').replace('_M', ' ').split()
+                fc = float(params[0])
+                M = int(params[1]) if len(params) > 1 else 11
+                filtered = modified_sinc(spectrum, fc, M)
+        else:
+            sigma_str = name.replace('Gaussian_s', '')
+            sigma = float(sigma_str)
+            filtered = gaussian_filter(spectrum, sigma)
+        
+        fft_filt = np.abs(fft(filtered))[:n//2]
+        ax2.semilogy(freqs, fft_filt, color=colors[i], 
+                    label=f'{name}', alpha=0.8, linewidth=1.2)
+    
+    ax2.set_xlabel('Normalized Frequency', fontsize=11)
+    ax2.set_ylabel('Magnitude (log scale)', fontsize=11)
+    ax2.set_title('Frequency Response (Stopband Attenuation)', fontsize=12, fontweight='bold')
+    ax2.legend(loc='upper right')
+    ax2.grid(True, alpha=0.3, which='both')
+    
+    # Plot 3: Spectral Quality Metrics Comparison
+    ax3 = fig.add_subplot(2, 2, 3)
+    
+    # Select top 6 filters by overall quality score
     top_filters = sorted(scores.items(), key=lambda x: -x[1])[:6]
     filter_names = [f[0] for f in top_filters]
     filter_scores = [f[1] for f in top_filters]
     
-    # Color code by type
+    # Color code by type and highlight recommended
     colors_bar = []
     for name in filter_names:
         if name == recommended:
-            colors_bar. append('green')
+            colors_bar.append('green')
         elif name.startswith('SG'):
             colors_bar.append('blue')
         elif name.startswith('MS'):
@@ -825,17 +895,15 @@ def plot_filter_comparison(
                 f'{score:.1f}',
                 ha='left', va='center', fontsize=9, fontweight='bold')
     
-    # Plot 4: Multi-metric radar comparison
-    ax4 = fig. add_subplot(2, 2, 4)
+    # Plot 4: Multi-metric radar comparison (TOP 3)
+    ax4 = fig.add_subplot(2, 2, 4)
     
-    # Select representative filters for detailed comparison
-    rep_filters = ['SG_w11_o3', 'MS_fc0.10_M11', 'Gaussian_s1.5']
     metrics_names = ['Noise\nReduction', 'Peak\nPreservation', 'SNR\nImprovement', 'Stopband\nAttenuation']
     
     x = np.arange(len(metrics_names))
     width = 0.25
     
-    for i, fname in enumerate(rep_filters):
+    for i, fname in enumerate(top_3_names):
         if fname not in results:
             continue
         m = results[fname]
@@ -848,8 +916,8 @@ def plot_filter_comparison(
             min(m.frequency_attenuation_db * 5, 100)  # Scale stopband to similar range
         ]
         
-        color = 'blue' if fname. startswith('SG') else ('red' if fname.startswith('MS') else 'green')
-        ax4.bar(x + i*width, values, width, label=fname, alpha=0.7, color=color, edgecolor='black')
+        ax4.bar(x + i*width, values, width, label=fname, alpha=0.7, 
+                color=colors[i], edgecolor='black')
     
     ax4.set_xticks(x + width)
     ax4.set_xticklabels(metrics_names, fontsize=10)
@@ -861,13 +929,13 @@ def plot_filter_comparison(
     ax4.set_ylim(0, 105)
     
     # Overall title
-    plt.suptitle('LIBS Smoothing Filter Comparison - Spectral Quality Analysis\nSchmid 2022 [233]:  Modified Sinc vs Savitzky-Golay Evaluation',
+    plt.suptitle('LIBS Smoothing Filter Comparison - Spectral Quality Analysis\nSchmid 2022 [233]: Modified Sinc vs Savitzky-Golay Evaluation',
                  fontsize=14, fontweight='bold', y=0.98)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     
     if save_path:
-        plt. savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"\n✓ Figure saved to:  {save_path}")
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"\n✓ Figure saved to: {save_path}")
     
     plt.show()
 
@@ -1022,59 +1090,97 @@ if __name__ == "__main__":
     USE_REAL_DATA = True  # Set to False to use synthetic test data
     
     REAL_DATA_CONFIG = {
-        # UPDATE THIS PATH to your actual CSV file
-        "filepath": r"D:\Ryan\UM\Academic\Y4S1\KIE4002 FINAL YEAR PROJECT\Irish_Soil_DataSet\Irish_Soil_DataSet2.csv",
-        
-        # Your data layout:  First column = wavelengths, First row = sample names
+        "filepath": r"D:\Ryan\UM\Academic\Y4S1\KIE4002 FINAL YEAR PROJECT\Irish_Soil_DataSet\Irish_Soil_DataSet2. csv",
         "wavelengths_in_first_column": True,
         "sample_names_in_first_row": True,
-        
-        # Label mapping (optional - set to None if not available)
-        "label_map_csv": None,  # Set path if you have label mapping
-        "label_map_sample_col": "sample",
-        "label_map_label_col": "label",
-        
-        # Wavelength range (197. 001 - 973.5891 nm per your data)
         "wavelength_range": (197.001, 973.5891),
-        
-        "label_column":  None,
-        "label_column_index": -1,
     }
     
     # =========================================================================
     # LOAD DATA
     # =========================================================================
     if USE_REAL_DATA: 
-        cfg = REAL_DATA_CONFIG
         try:
-            spectra_raw, labels, wavelengths = load_real_data(
-                cfg["filepath"],
-                wavelengths_in_first_column=cfg. get("wavelengths_in_first_column", False),
-                sample_names_in_first_row=cfg.get("sample_names_in_first_row", True),
-                label_column=cfg.get("label_column", None),
-                label_column_index=cfg.get("label_column_index", -1),
-                label_map_csv=cfg.get("label_map_csv", None),
-                label_map_sample_col=cfg. get("label_map_sample_col", "sample"),
-                label_map_label_col=cfg.get("label_map_label_col", "label"),
-                wavelength_range=cfg.get("wavelength_range", (200.0, 950.0)),
+            from libs_preprocessing import load_irish_soil_data
+            
+            spectra_raw, sample_names, wavelengths = load_irish_soil_data(
+                REAL_DATA_CONFIG["filepath"]
             )
-            print("\n✓ Real data loaded successfully")
-        except Exception as e: 
-            print(f"\n❌ Failed to load real data: {e}")
-            print("\nDEBUGGING TIPS:")
-            print("1. Check CSV has wavelengths in first column (197.001-973.5891)")
-            print("2. Check CSV has sample names in first row (Clay_1, Clay_2, ... )")
-            print("3. Ensure no extra header rows/columns")
-            print("\nFalling back to synthetic data.. .\n")
+            
+            # Apply baseline correction first
+            print("\nApplying AsLS baseline correction...")
+            spectra_baseline = apply_baseline_correction_batch(
+                spectra_raw, lam=1e6, p=0.01, verbose=True
+            )
+            
+        except Exception as e:
+            print(f"\n⚠️ Could not load real data: {e}")
             USE_REAL_DATA = False
     
     if not USE_REAL_DATA: 
-        spectra_raw, labels, wavelengths = generate_synthetic_data(
-            n_samples=324,
-            n_features=12981,
-            wavelength_range=(200, 950),
-            random_state=42
-        )
+        # Fallback to synthetic
+        print("\nGenerating synthetic data...")
+        # ...  (existing synthetic generation code)
+    
+    # Run comparison WITH classification for BOTH objectives
+    print("\n" + "="*70)
+    print("COMPARISON 1: NUTRIENT CLASSIFICATION (NPK)")
+    print("="*70)
+    results_nutrient = compare_filters(
+        spectra_baseline, 
+        wavelengths, 
+        sample_names,
+        objective='nutrient',  # High/Med/Low
+        verbose=True
+    )
+    
+    print("\n" + "="*70)
+    print("COMPARISON 2: CONTAMINANT DETECTION")
+    print("="*70)
+    results_contaminant = compare_filters(
+        spectra_baseline, 
+        wavelengths, 
+        sample_names,
+        objective='contaminant',  # Clean/Contaminated
+        verbose=True
+    )
+    
+    # Generate recommendations for BOTH
+    print("\n" + "="*70)
+    print("NUTRIENT CLASSIFICATION RECOMMENDATION")
+    print("="*70)
+    recommended_nut, justification_nut = generate_recommendation(results_nutrient)
+    print(justification_nut)
+    
+    print("\n" + "="*70)
+    print("CONTAMINANT DETECTION RECOMMENDATION")
+    print("="*70)
+    recommended_con, justification_con = generate_recommendation(results_contaminant)
+    print(justification_con)
+    
+    # Save both reports
+    save_recommendation_report(
+        results_nutrient, 
+        recommended_nut, 
+        justification_nut,
+        filepath='filter_recommendation_nutrient.txt'
+    )
+    
+    save_recommendation_report(
+        results_contaminant, 
+        recommended_con, 
+        justification_con,
+        filepath='filter_recommendation_contaminant.txt'
+    )
+    
+    # Visualize (show nutrient results)
+    plot_filter_comparison(
+        spectra_baseline[0],
+        wavelengths,
+        results_nutrient,
+        recommended_nut,
+        save_path='filter_comparison_nutrient.png'
+    )
     
     # =========================================================================
     # APPLY BASELINE CORRECTION
@@ -1151,78 +1257,6 @@ if __name__ == "__main__":
     print("LIBS SMOOTHING FILTER COMPARISON")
     print("Schmid 2022 [233]:  Evaluating SG vs Modified Sinc")
     print("="*70)
-    
-    # -------------------- REPLACE the existing "DATA LOADING OPTIONS" + "LOAD DATA" block --------------------
-    # (paste this in the main section of filter_comparison.py, replacing the previous USE_REAL_DATA / REAL_DATA_CONFIG / loading code)
-
-    # Set this True to load your real CSV, False to use synthetic data
-    USE_REAL_DATA = True  # <-- change to False to use synthetic test data
-
-    # Example configuration for your dataset:
-    # - first column = wavelengths (197.001 -> 973.5891)
-    # - first row = sample names ("Clay_1", "Clay_2", ...)
-    # - 320 samples, 12981 wavelength rows
-    # Configuration for your dataset layout: 
-    # CSV structure:  First column = wavelengths (197.001-973.5891), First row = sample names (Clay_1, Clay_2, ...)
-    REAL_DATA_CONFIG = {
-        # UPDATE THIS PATH to your actual file location
-        "filepath": r"D:\Ryan\UM\Academic\Y4S1\KIE4002 FINAL YEAR PROJECT\Irish_Soil_DataSet\Irish_Soil_DataSet.csv",
-        
-        # Your data layout flags
-        "wavelengths_in_first_column": True,   # Wavelengths are in rows (first column)
-        "sample_names_in_first_row": True,     # Sample names are in columns (first row)
-        
-        # Label mapping (REQUIRED for classification)
-        # Create a CSV file with two columns: sample,label
-        # Example content:
-        #   sample,label
-        #   Clay_1,High
-        #   Clay_2,Medium
-        #   Clay_3,Low
-        #   ...
-        "label_map_csv": r"D:\Ryan\UM\Academic\Y4S1\KIE4002 FINAL YEAR PROJECT\Data\label_map.csv",
-        "label_map_sample_col":  "sample",      # Column name containing sample IDs
-        "label_map_label_col": "label",        # Column name containing class labels (High/Medium/Low)
-        
-        # Wavelength range (your actual range)
-        "wavelength_range": (197.001, 973.5891),
-        
-        # Leave these as None for your layout
-        "label_column": None,
-        "label_column_index": -1,
-    }
-
-    # Load either real data (using config.get to avoid KeyError) or synthetic data
-    if USE_REAL_DATA:
-        cfg = REAL_DATA_CONFIG
-        try:
-            spectra_raw, labels, wavelengths = load_real_data(
-                cfg["filepath"],
-                wavelengths_in_first_column=cfg.get("wavelengths_in_first_column", False),
-                sample_names_in_first_row=cfg.get("sample_names_in_first_row", True),
-                label_column=cfg.get("label_column", None),
-                label_column_index=cfg.get("label_column_index", -1),
-                label_map_csv=cfg.get("label_map_csv", None),
-                label_map_sample_col=cfg.get("label_map_sample_col", "sample"),
-                label_map_label_col=cfg.get("label_map_label_col", "label"),
-                wavelength_range=cfg.get("wavelength_range", (200.0, 950.0)),
-            )
-        except Exception as e:
-            print(f"\n❌ Failed to load real data: {e}")
-            print("Falling back to synthetic data for debugging.\n")
-            spectra_raw, labels, wavelengths = generate_synthetic_data(
-                n_samples=324,
-                n_features=12981,
-                wavelength_range=(200, 950),
-                random_state=42
-            )
-    else:
-        spectra_raw, labels, wavelengths = generate_synthetic_data(
-            n_samples=324,
-            n_features=12981,
-            wavelength_range=(200, 950),
-            random_state=42
-        )
 
     # Quick checks and guidance
     print(f"\nLoaded spectra shape: {spectra_raw.shape}")

@@ -3,118 +3,116 @@ LIBS Spectral Data Preprocessing Pipeline
 ==========================================
 Phase 1 Implementation for Embedded ML Soil Analysis Project
 
+Dataset: Irish Soil Dataset (320 samples × 12,981 wavelengths)
+- NO CLASSIFICATION LABELS (qualitative analysis only at this stage)
+- Labels will be added later via external label mapping
+
 Methods justified by academic literature:
-- AsLS Baseline Correction:  r=0.93, 19% RMSE improvement [221]
-- Savitzky-Golay Filter: Standard LIBS practice [228]
+- AsLS Baseline Correction:   r=0.93, 19% RMSE improvement [221]
+- Savitzky-Golay Filter:  Standard LIBS practice [228]
 - L2 Normalization: Bias=0.000, RMSE=0.002 [237]
 """
 
 import numpy as np
 import pandas as pd
 from scipy import sparse
-from scipy.sparse. linalg import spsolve
+from scipy.sparse.linalg import spsolve
 from scipy.signal import savgol_filter
 from scipy.ndimage import gaussian_filter1d
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import normalize
 import matplotlib.pyplot as plt
 from typing import Tuple, Optional, Dict
 import warnings
+import os
 
 # ============================================================================
-# STEP 1: DATA LOADING & STRATIFIED SPLITTING
+# STEP 1: DATA LOADING (Label-Free)
 # ============================================================================
 
-def load_libs_data(filepath: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def load_irish_soil_data(
+    filepath: str = r"D:\Ryan\UM\Academic\Y4S1\KIE4002 FINAL YEAR PROJECT\Irish_Soil_DataSet\Irish_Soil_DataSet2.csv"
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]: 
     """
-    Load LIBS spectral data from CSV file. 
+    Load Irish Soil LIBS spectral data from CSV file.
     
     Expected format:
-    - Rows: 324 samples
-    - Columns: wavelength values (12,981 features) + label column
+    - First column:  Wavelengths (197.001 - 973.5891 nm) as row index
+    - First row: Sample names (Clay_1, Clay_2, .. ., Clay_320) as column headers
+    - Data:  12,981 rows (wavelengths) × 320 columns (samples)
+    
+    NO LABELS INCLUDED - Classification labels must be added separately
+    via label_map.csv when available.
     
     Parameters
     ----------
     filepath : str
-        Path to the CSV file containing LIBS spectra
+        Path to the Irish Soil CSV file
         
     Returns
     -------
     spectra : np.ndarray
-        Shape (n_samples, n_features) - raw spectral intensities
-    labels : np.ndarray
-        Shape (n_samples,) - class labels (High/Medium/Low or 0/1/2)
+        Shape (320, 12981) - raw spectral intensities (samples × features)
+    sample_names : np.ndarray
+        Shape (320,) - sample identifiers (Clay_1, Clay_2, ...)
     wavelengths : np.ndarray
-        Shape (n_features,) - wavelength values in nm
+        Shape (12981,) - wavelength values in nm (197.001 - 973.5891)
     """
-    df = pd.read_csv(filepath)
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Dataset not found: {filepath}\n"
+                              f"Please verify the file path is correct.")
     
-    # Assume last column is label, first row might be wavelengths
-    # Adjust based on your actual data format
-    if df.columns[0]. replace('.', '').isdigit():
-        # First row contains wavelength headers
-        wavelengths = df. columns[:-1].astype(float).values
-        labels = df.iloc[:, -1].values
-        spectra = df.iloc[:, :-1].values. astype(float)
-    else:
-        # Wavelengths need to be inferred (200-950nm range)
-        n_features = df.shape[1] - 1
-        wavelengths = np.linspace(200, 950, n_features)
-        labels = df.iloc[:, -1].values
-        spectra = df.iloc[:, :-1].values. astype(float)
+    print(f"\n{'='*70}")
+    print("LOADING IRISH SOIL LIBS DATASET")
+    print(f"{'='*70}")
+    print(f"File: {filepath}")
     
-    print(f"Loaded:  {spectra.shape[0]} samples × {spectra.shape[1]} features")
-    print(f"Wavelength range: {wavelengths.min():.1f} - {wavelengths.max():.1f} nm")
-    print(f"Class distribution: {np.unique(labels, return_counts=True)}")
+    # Read CSV with first column as index (wavelengths)
+    df = pd.read_csv(filepath, index_col=0)
     
-    return spectra, labels, wavelengths
-
-
-def stratified_split(
-    spectra: np.ndarray,
-    labels: np.ndarray,
-    test_size:  float = 0.30,
-    random_state: int = 42
-) -> Tuple[np.ndarray, np. ndarray, np.ndarray, np.ndarray]:
-    """
-    Perform stratified train-test split (70-30 as per methodology).
+    print(f"Raw CSV shape: {df.shape} (rows=wavelengths, cols=samples)")
+    print(f"First 3 sample names: {df.columns[:3].tolist()}")
+    print(f"First 3 wavelengths: {df.index[:3].tolist()}")
     
-    Ensures equal distribution of High/Medium/Low classes in both sets.
+    # Extract sample names from column headers
+    sample_names = df.columns.astype(str).values
+    n_samples = len(sample_names)
     
-    Parameters
-    ----------
-    spectra : np. ndarray
-        Raw spectral data
-    labels : np.ndarray
-        Class labels
-    test_size : float
-        Proportion for test set (default 0.30 = 30%)
-    random_state : int
-        Random seed for reproducibility
-        
-    Returns
-    -------
-    X_train, X_test, y_train, y_test : np.ndarray
-        Split datasets
-    """
-    X_train, X_test, y_train, y_test = train_test_split(
-        spectra, labels,
-        test_size=test_size,
-        stratify=labels,  # Ensures balanced class distribution
-        random_state=random_state
-    )
+    # Extract wavelengths from row index
+    try:
+        wavelengths = df.index.astype(float).values
+        print(f"✓ Wavelengths parsed:  {wavelengths[0]:.3f} - {wavelengths[-1]:.3f} nm ({len(wavelengths)} points)")
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Failed to parse wavelengths from index: {e}\n"
+                        f"Expected numeric wavelength values in first column.")
     
-    print(f"\nStratified Split Complete:")
-    print(f"  Training:  {X_train.shape[0]} samples ({100*(1-test_size):.0f}%)")
-    print(f"  Testing:   {X_test.shape[0]} samples ({100*test_size:.0f}%)")
-    print(f"  Train class distribution: {np.unique(y_train, return_counts=True)}")
-    print(f"  Test class distribution:   {np.unique(y_test, return_counts=True)}")
+    # Convert to spectra array:  Transpose (wavelengths, samples) → (samples, wavelengths)
+    try:
+        spectra = df.values.T.astype(float)
+        print(f"✓ Spectra array shape: {spectra.shape} (samples, features)")
+    except ValueError as e:
+        raise ValueError(f"Failed to convert spectra to numeric values: {e}\n"
+                        f"Check CSV contains only numeric spectral data.")
     
-    return X_train, X_test, y_train, y_test
+    # Summary
+    print(f"\n{'='*70}")
+    print("DATA LOADING SUMMARY")
+    print(f"{'='*70}")
+    print(f"Samples:        {n_samples} (Clay_1 ...  Clay_{n_samples})")
+    print(f"Features:      {len(wavelengths)} wavelengths")
+    print(f"Wavelengths:   {wavelengths.min():.3f} - {wavelengths.max():.3f} nm")
+    print(f"Intensity range: {spectra.min():.2f} - {spectra.max():.2f}")
+    print(f"\n⚠️  NO LABELS LOADED - This is qualitative preprocessing only")
+    print(f"   For classification, provide label_map.csv later:")
+    print(f"   Format: sample,label")
+    print(f"   Example: Clay_1,High")
+    print(f"{'='*70}\n")
+    
+    return spectra, sample_names, wavelengths
 
 
 # ============================================================================
 # STEP 2: BASELINE CORRECTION - Asymmetric Least Squares (AsLS)
+# Justification: r=0.93, 19% RMSE improvement [221]
 # ============================================================================
 
 def asls_baseline(
@@ -137,34 +135,28 @@ def asls_baseline(
     spectrum : np.ndarray
         Single spectrum (1D array)
     lam : float
-        Smoothness parameter (λ). Higher = smoother baseline. 
-        Typical range: 1e4 to 1e7 for LIBS
+        Smoothness parameter (λ). Higher = smoother baseline.  
+        Recommended: 1e6 for LIBS (validated by baseline_comparison.py)
     p : float
         Asymmetry parameter.  Lower = baseline follows valleys better.
-        Typical range: 0.001 to 0.1
+        Recommended: 0.01 for LIBS
     max_iter : int
         Maximum iterations for convergence
         
     Returns
     -------
-    baseline : np.ndarray
+    baseline :  np.ndarray
         Estimated baseline to subtract from spectrum
-        
-    References
-    ----------
-    Eilers, P.H.C., Boelens, H.F.M. (2005). Baseline correction with 
-    asymmetric least squares smoothing. 
     """
     L = len(spectrum)
-    # Construct second-order difference matrix
     D = sparse.diags([1, -2, 1], [0, -1, -2], shape=(L, L-2))
-    D = lam * D. dot(D. T)
+    D = lam * D.dot(D.T)
     
     w = np.ones(L)
     W = sparse.spdiags(w, 0, L, L)
     
     for _ in range(max_iter):
-        W. setdiag(w)
+        W.setdiag(w)
         Z = W + D
         z = spsolve(Z, w * spectrum)
         w_new = p * (spectrum > z) + (1 - p) * (spectrum < z)
@@ -174,24 +166,273 @@ def asls_baseline(
     
     return z
 
+def polynomial_baseline(
+    spectrum: np.ndarray,
+    degree: int = 5
+) -> np.ndarray:
+    """
+    Polynomial fitting baseline correction.
+    
+    Justification: 
+    - Lowest computational cost for MCU deployment
+    - baseline_comparison.py validation:  Best peak preservation + edge stability
+    
+    Parameters
+    ----------
+    spectrum : np. ndarray
+        Single spectrum (1D array)
+    degree : int
+        Polynomial degree (default: 5, validated optimal)
+        
+    Returns
+    -------
+    baseline : np.ndarray
+        Estimated baseline to subtract from spectrum
+    """
+    x = np.arange(len(spectrum))
+    # Iterative fitting to find lower envelope
+    baseline = spectrum.copy()
+    
+    for _ in range(3):  # 3 iterations to converge to lower envelope
+        coeffs = np.polyfit(x, baseline, degree)
+        baseline_new = np.polyval(coeffs, x)
+        # Keep points below fitted curve
+        baseline = np.minimum(baseline, baseline_new)
+    
+    return baseline_new
+
+def generate_nutrient_labels(sample_names:  np.ndarray) -> np.ndarray:
+    """
+    Generate nutrient level labels (High/Medium/Low) from sample names.
+    
+    Mapping based on Soil Type as Proxy for Nutrient Holding Capacity: 
+    - Clay/ClayLoam: HIGH nutrient retention (High CEC)
+    - Garden_top/Chalk: MEDIUM fertility
+    - Sandy/Gravel: LOW nutrient retention (leaches nutrients)
+    - Contaminated samples:  Excluded (may distort nutrient signals)
+    
+    Parameters
+    ----------
+    sample_names :  np.ndarray
+        Sample identifiers (e.g., Clay_1, Sandy_15, TPH_10)
+        
+    Returns
+    -------
+    labels : np.ndarray
+        Nutrient level labels:  2=High, 1=Medium, 0=Low, -1=Excluded
+    """
+    labels = []
+    
+    for name in sample_names:
+        n = str(name).lower()
+        
+        # HIGH NUTRIENT RETENTION (Clay soils - High CEC)
+        if 'clay' in n and 'loam' not in n:
+            labels.append(2)  # High
+        elif 'clayloam' in n:
+            labels.append(2)  # High
+        
+        # MEDIUM NUTRIENT RETENTION
+        elif 'garden' in n: 
+            labels.append(1)  # Medium
+        elif 'chalk_' in n and 't' not in n:  # Chalk but NOT ChalkT
+            labels.append(1)  # Medium
+        
+        # LOW NUTRIENT RETENTION (Sandy/Gravel - low CEC)
+        elif 'sandy' in n: 
+            labels.append(0)  # Low
+        elif 'gravel' in n:
+            labels.append(0)  # Low
+        
+        # CONTAMINATED - EXCLUDE from nutrient training
+        # Contaminants suppress nutrient signals, confusing classification
+        elif 'tph' in n or 'arsenic' in n or 'heavymetals' in n or 'chalkt' in n: 
+            labels.append(-1)  # Exclude
+        
+        else:
+            labels.append(-1)  # Unknown - exclude by default
+    
+    labels = np.array(labels)
+    
+    # Summary statistics
+    n_high = np.sum(labels == 2)
+    n_medium = np.sum(labels == 1)
+    n_low = np.sum(labels == 0)
+    n_excluded = np.sum(labels == -1)
+    
+    print(f"\n{'='*70}")
+    print("NUTRIENT LEVEL LABELS GENERATED")
+    print(f"{'='*70}")
+    print(f"Mapping:  Soil Type → Nutrient Retention Capacity")
+    print(f"  High (2):    {n_high} samples (Clay, ClayLoam)")
+    print(f"  Medium (1):  {n_medium} samples (Garden_top, Chalk)")
+    print(f"  Low (0):     {n_low} samples (Sandy, Gravel)")
+    print(f"  Excluded:     {n_excluded} samples (Contaminated)")
+    print(f"\nTotal usable:  {n_high + n_medium + n_low} samples")
+    print(f"{'='*70}")
+    
+    return labels
+
+def generate_contaminant_labels(sample_names: np.ndarray) -> np.ndarray:
+    """
+    Generate contaminant detection labels (Clean/Contaminated) from sample names.
+    
+    Binary Classification: 
+    - Clean (0): Uncontaminated soils (Clay, ClayLoam, Chalk, Gravel, Sandy, Garden_top)
+    - Contaminated (1): TPH (diesel), Arsenic, HeavyMetals, ChalkT (treated)
+    
+    Parameters
+    ----------
+    sample_names : np.ndarray
+        Sample identifiers
+        
+    Returns
+    -------
+    labels : np.ndarray
+        Binary labels: 0=Clean, 1=Contaminated
+    """
+    labels = []
+    
+    for name in sample_names: 
+        n = str(name).lower()
+        
+        # CONTAMINATED CLASS
+        if 'tph' in n:
+            labels.append(1)  # Total Petroleum Hydrocarbons (Diesel)
+        elif 'arsenic' in n:
+            labels. append(1)  # Heavy Metal (As)
+        elif 'heavymetals' in n: 
+            labels.append(1)  # Heavy Metals mix (Pb, Cd, Cr)
+        elif 'chalkt' in n:
+            labels.append(1)  # Chalk Treated (assuming T = Treated/Contaminated)
+        
+        # CLEAN CLASS (Control)
+        elif 'clay' in n and 'loam' not in n:
+            labels.append(0)
+        elif 'clayloam' in n:
+            labels.append(0)
+        elif 'chalk_' in n:  # Non-treated chalk
+            labels.append(0)
+        elif 'gravel' in n:
+            labels. append(0)
+        elif 'sandy' in n:
+            labels.append(0)
+        elif 'garden' in n:
+            labels.append(0)
+        
+        else:
+            labels.append(0)  # Default to clean if unsure
+    
+    labels = np.array(labels)
+    
+    # Summary statistics
+    n_clean = np. sum(labels == 0)
+    n_contaminated = np. sum(labels == 1)
+    
+    print(f"\n{'='*70}")
+    print("CONTAMINANT DETECTION LABELS GENERATED")
+    print(f"{'='*70}")
+    print(f"Binary Classification:")
+    print(f"  Clean (0):        {n_clean} samples")
+    print(f"  Contaminated (1): {n_contaminated} samples")
+    print(f"\nClass balance:  {n_contaminated/(n_clean+n_contaminated)*100:.1f}% contaminated")
+    print(f"{'='*70}")
+    
+    return labels
+
+def stratified_split_with_labels(
+    spectra: np.ndarray,
+    labels: np.ndarray,
+    test_size: float = 0.30,
+    random_state: int = 42,
+    exclude_negative:  bool = True
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Perform stratified train-test split with optional exclusion of -1 labels.
+    
+    Parameters
+    ----------
+    spectra : np. ndarray
+        Preprocessed spectra
+    labels : np.ndarray
+        Class labels (may include -1 for excluded samples)
+    test_size : float
+        Proportion for test set (default 0.30 = 30%)
+    random_state : int
+        Random seed for reproducibility
+    exclude_negative :  bool
+        If True, remove samples with label=-1 before splitting
+        
+    Returns
+    -------
+    X_train, X_test, y_train, y_test : np.ndarray
+        Split datasets
+    """
+    from sklearn.model_selection import train_test_split
+    
+    # Filter out excluded samples if requested
+    if exclude_negative: 
+        valid_mask = labels != -1
+        spectra = spectra[valid_mask]
+        labels = labels[valid_mask]
+        print(f"Excluded {np. sum(~valid_mask)} samples with label=-1")
+    
+    # Stratified split
+    X_train, X_test, y_train, y_test = train_test_split(
+        spectra, labels,
+        test_size=test_size,
+        stratify=labels,
+        random_state=random_state
+    )
+    
+    print(f"\n{'='*70}")
+    print("STRATIFIED SPLIT COMPLETE")
+    print(f"{'='*70}")
+    print(f"Training:   {X_train.shape[0]} samples ({100*(1-test_size):.0f}%)")
+    print(f"Testing:   {X_test.shape[0]} samples ({100*test_size:.0f}%)")
+    
+    # Class distribution
+    unique_train, counts_train = np.unique(y_train, return_counts=True)
+    unique_test, counts_test = np.unique(y_test, return_counts=True)
+    
+    print(f"\nTrain class distribution:")
+    for cls, cnt in zip(unique_train, counts_train):
+        print(f"  Class {cls}: {cnt} samples ({cnt/len(y_train)*100:.1f}%)")
+    
+    print(f"\nTest class distribution:")
+    for cls, cnt in zip(unique_test, counts_test):
+        print(f"  Class {cls}: {cnt} samples ({cnt/len(y_test)*100:.1f}%)")
+    
+    print(f"{'='*70}")
+    
+    return X_train, X_test, y_train, y_test
 
 def apply_baseline_correction(
     spectra: np.ndarray,
-    lam: float = 1e6,
-    p: float = 0.01,
+    method: str = 'polynomial',  # CHANGED from 'asls'
+    degree: int = 5,              # NEW parameter
+    lam: float = 1e6,             # Keep for AsLS option
+    p: float = 0.01,              # Keep for AsLS option
     verbose: bool = True
 ) -> np.ndarray:
     """
-    Apply AsLS baseline correction to all spectra.
+    Apply baseline correction to all spectra.
+    
+    DEFAULT METHOD:  Polynomial (degree=5)
+    Justification:  baseline_comparison.py showed best peak recovery + edge stability
     
     Parameters
     ----------
     spectra :  np.ndarray
         Shape (n_samples, n_features)
+    method : str
+        'polynomial' (RECOMMENDED) or 'asls' (legacy)
+    degree : int
+        Polynomial degree (default: 5, validated by baseline_comparison.py)
     lam : float
-        Smoothness parameter
+        AsLS smoothness parameter (if method='asls')
     p : float
-        Asymmetry parameter
+        AsLS asymmetry parameter (if method='asls')
     verbose : bool
         Print progress
         
@@ -203,56 +444,63 @@ def apply_baseline_correction(
     n_samples = spectra.shape[0]
     corrected = np.zeros_like(spectra)
     
+    if verbose:
+        method_name = f"Polynomial (degree={degree})" if method == 'polynomial' else f"AsLS (λ={lam:. 0e}, p={p})"
+        print(f"Applying {method_name} baseline correction...")
+    
     for i in range(n_samples):
-        baseline = asls_baseline(spectra[i], lam=lam, p=p)
+        if method == 'polynomial':
+            baseline = polynomial_baseline(spectra[i], degree=degree)
+        elif method == 'asls': 
+            baseline = asls_baseline(spectra[i], lam=lam, p=p)
+        else:
+            raise ValueError(f"Unknown method: {method}. Use 'polynomial' or 'asls'")
+        
         corrected[i] = spectra[i] - baseline
         
         if verbose and (i + 1) % 50 == 0:
-            print(f"  Baseline correction:  {i+1}/{n_samples} spectra processed")
+            print(f"  Progress: {i+1}/{n_samples} spectra processed")
     
     # Ensure no negative values (physical constraint)
-    corrected = np. maximum(corrected, 0)
+    corrected = np.maximum(corrected, 0)
     
     if verbose:
         print(f"✓ Baseline correction complete: {n_samples} spectra")
     
     return corrected
-
-
 # ============================================================================
-# STEP 3: NOISE REDUCTION - Savitzky-Golay Filter
+# STEP 3: NOISE REDUCTION
+# Default:  Savitzky-Golay [228]
+# Alternative: Modified Sinc (from filter_comparison.py recommendation)
 # ============================================================================
 
 def apply_savgol_filter(
     spectra: np.ndarray,
-    window_length: int = 11,
-    polyorder: int = 3
+    window_length: int = 7,
+    polyorder: int = 2
 ) -> np.ndarray:
     """
     Apply Savitzky-Golay smoothing filter. 
     
-    Justification: 
-    - Standard LIBS practice for noise reduction [228]
-    - Preserves peak height and shape while reducing high-frequency noise
+    Justification:  Standard LIBS practice [228]
+    
+    Parameters from filter_comparison.py optimization:
+    - window_length:  7 (optimal for LIBS spectral resolution)
+    - polyorder: 2 (preserves peak shape)
     
     Parameters
     ----------
-    spectra : np.ndarray
+    spectra :  np.ndarray
         Shape (n_samples, n_features)
-    window_length :  int
-        Length of filter window (must be odd). Default 11.
+    window_length : int
+        Filter window (must be odd)
     polyorder : int
-        Polynomial order for fitting. Default 3.
+        Polynomial order for fitting
         
     Returns
     -------
-    smoothed : np.ndarray
+    smoothed : np. ndarray
         Smoothed spectra
-        
-    Notes
-    -----
-    Window=11, polyorder=3 is optimal for LIBS spectral resolution.
-    Larger windows provide more smoothing but may distort narrow peaks.
     """
     if window_length % 2 == 0:
         window_length += 1
@@ -268,30 +516,26 @@ def apply_savgol_filter(
     
     return smoothed
 
-
 def apply_gaussian_filter(
-    spectra:  np.ndarray,
+    spectra: np.ndarray,
     sigma: float = 1.5
 ) -> np.ndarray:
     """
-    Apply Gaussian smoothing filter (alternative to Savitzky-Golay).
-    
-    Use for comparison as per methodology recommendation to test
-    alternative to SG filter.
+    Apply Gaussian smoothing filter to all spectra.
     
     Parameters
     ----------
-    spectra :  np.ndarray
+    spectra : np.ndarray
         Shape (n_samples, n_features)
     sigma : float
-        Standard deviation of Gaussian kernel
+        Standard deviation for Gaussian kernel
         
     Returns
     -------
-    smoothed : np. ndarray
+    smoothed : np.ndarray
         Smoothed spectra
     """
-    smoothed = np. apply_along_axis(
+    smoothed = np.apply_along_axis(
         lambda x: gaussian_filter1d(x, sigma=sigma),
         axis=1,
         arr=spectra
@@ -301,23 +545,77 @@ def apply_gaussian_filter(
     
     return smoothed
 
+def modified_sinc_filter(
+    spectrum: np.ndarray,
+    fc: float = 0.1,
+    M: int = 11
+) -> np.ndarray:
+    """
+    Modified Sinc (Windowed-Sinc) low-pass filter.
+    
+    Alternative to SG if filter_comparison.py showed >2% improvement.
+    
+    Parameters
+    ----------
+    spectrum : np.ndarray
+        Single spectrum
+    fc : float
+        Normalized cutoff frequency (0 < fc < 0.5)
+    M : int
+        Filter length (odd)
+        
+    Returns
+    -------
+    filtered : np.ndarray
+        Filtered spectrum
+    """
+    if M % 2 == 0:
+        M += 1
+    
+    n = np.arange(M)
+    h = np.sinc(2 * fc * (n - (M - 1) / 2))
+    window = np.blackman(M)
+    h = h * window
+    h = h / np.sum(h)
+    
+    return np.convolve(spectrum, h, mode='same')
+
+def apply_modified_sinc_filter(
+    spectra: np.ndarray,
+    fc: float = 0.1,
+    M: int = 11
+) -> np.ndarray:
+    """Apply Modified Sinc filter to all spectra."""
+    smoothed = np.apply_along_axis(
+        lambda x: modified_sinc_filter(x, fc=fc, M=M),
+        axis=1,
+        arr=spectra
+    )
+    
+    print(f"✓ Modified Sinc filter applied: fc={fc}, M={M}")
+    
+    return smoothed
+
 
 # ============================================================================
-# STEP 4: NORMALIZATION - L2 (Euclidean) Norm
+# STEP 4: NORMALIZATION
+# Default: L2-Norm [237]:  Bias=0.000, RMSE=0.002
 # ============================================================================
 
 def apply_l2_normalization(spectra: np.ndarray) -> np.ndarray:
     """
     Apply L2 (Euclidean) normalization to each spectrum.
     
-    Justification:
+    Justification: 
     - 2025 validation study:  Bias=0.000, RMSE=0.002 [237]
     - Corrects for shot-to-shot laser energy fluctuations
-    - Superior to SNV (which had RMSE=0.220 - worst performer)
+    - Superior to SNV (RMSE=0.220 - worst performer)
+    
+    From normalization_comparison.py: L2-Norm is recommended method. 
     
     Parameters
     ----------
-    spectra : np. ndarray
+    spectra : np.ndarray
         Shape (n_samples, n_features)
         
     Returns
@@ -331,7 +629,7 @@ def apply_l2_normalization(spectra: np.ndarray) -> np.ndarray:
     norms = np.linalg. norm(normalized, axis=1)
     assert np.allclose(norms, 1.0), "L2 normalization failed"
     
-    print(f"✓ L2 normalization applied:  all spectra scaled to unit norm")
+    print(f"✓ L2 normalization applied: all spectra scaled to unit norm")
     
     return normalized
 
@@ -340,32 +638,176 @@ def apply_l2_normalization(spectra: np.ndarray) -> np.ndarray:
 # COMPLETE PREPROCESSING PIPELINE
 # ============================================================================
 
-def preprocess_libs_spectra(
+def preprocess_irish_soil_spectra(
     spectra: np.ndarray,
-    asls_lam: float = 1e6,
-    asls_p: float = 0.01,
-    sg_window: int = 11,
-    sg_order: int = 3,
-    use_gaussian:  bool = False,
-    gaussian_sigma: float = 1.5,
+    sample_names: np.ndarray,
+    wavelengths: np.ndarray,
+    # UPDATED DEFAULTS based on comparison script results
+    baseline_method: str = 'polynomial',      # CHANGED from asls
+    baseline_degree: int = 5,                 # NEW:  Polynomial degree
+    asls_lam: float = 1e6,                    # Keep for legacy/alternative
+    asls_p: float = 0.01,                     # Keep for legacy/alternative
+    smoothing_method: str = 'savgol',
+    sg_window: int = 7,                       # CHANGED from 11
+    sg_order: int = 2,                        # CHANGED from 3
+    sinc_fc: float = 0.1,                     # Keep for alternative
+    sinc_M: int = 11,                         # Keep for alternative
     verbose: bool = True
 ) -> Dict[str, np.ndarray]: 
     """
-    Complete LIBS preprocessing pipeline.
+    Complete LIBS preprocessing pipeline for Irish Soil Dataset.
     
-    Order:  Baseline Correction → Noise Reduction → Normalization
+    OPTIMIZED PARAMETERS (from comparison script validation):
+    - Baseline:  Polynomial degree=5 (best peak recovery + edge stability)
+    - Smoothing: SG window=7, order=2 (optimal noise reduction)
+    - Normalization: L2-Norm (Bias=0.000, RMSE=0.002 [237])
+    
+    Pipeline:  Raw → Baseline Correction → Noise Reduction → Normalization
     
     Parameters
     ----------
     spectra : np.ndarray
         Raw spectral data (n_samples, n_features)
+    sample_names : np.ndarray
+        Sample identifiers
+    wavelengths : np.ndarray
+        Wavelength values in nm
+    baseline_method : str
+        'polynomial' (RECOMMENDED, validated) or 'asls' (legacy)
+    baseline_degree : int
+        Polynomial degree (default:  5, from baseline_comparison.py)
     asls_lam : float
-        AsLS smoothness parameter
+        AsLS smoothness (if baseline_method='asls')
     asls_p : float
-        AsLS asymmetry parameter
+        AsLS asymmetry (if baseline_method='asls')
+    smoothing_method : str
+        'savgol' (RECOMMENDED, validated) or 'sinc' (alternative)
+    sg_window : int
+        SG window length (default: 7, from filter_comparison.py)
+    sg_order : int
+        SG polynomial order (default: 2, from filter_comparison.py)
+    sinc_fc : float
+        Modified Sinc cutoff (if smoothing_method='sinc')
+    sinc_M : int
+        Modified Sinc filter length (if smoothing_method='sinc')
+    verbose : bool
+        Print progress messages
+        
+    Returns
+    -------
+    results : dict
+        Dictionary containing: 
+        - 'raw': Original spectra
+        - 'baseline_corrected': After baseline correction
+        - 'smoothed': After noise reduction
+        - 'normalized':  FINAL preprocessed (READY FOR FEATURE SELECTION)
+        - 'sample_names': Sample identifiers
+        - 'wavelengths': Wavelength values
+    """
+    results = {
+        'raw': spectra. copy(),
+        'sample_names': sample_names,
+        'wavelengths': wavelengths
+    }
+    
+    if verbose:
+        print("\n" + "="*70)
+        print("IRISH SOIL LIBS PREPROCESSING PIPELINE")
+        print("="*70)
+        print(f"Input:  {spectra.shape[0]} samples × {spectra. shape[1]} features")
+        method_str = f"Poly(deg={baseline_degree})" if baseline_method == 'polynomial' else f"AsLS(λ={asls_lam:.0e})"
+        print(f"Methods: {method_str} → SG(w={sg_window},o={sg_order}) → L2-Norm")
+        print("="*70)
+    
+    # Step 1: Baseline Correction
+    if verbose:
+        print("\n[1/3] Baseline Correction")
+        if baseline_method == 'polynomial': 
+            print(f"      Method: Polynomial (degree={baseline_degree})")
+            print(f"      Justification: baseline_comparison.py validation")
+            print(f"                     Best peak recovery + edge stability")
+        else:
+            print(f"      Method: AsLS (λ={asls_lam:. 0e}, p={asls_p})")
+            print(f"      Justification: r=0.93, 19% RMSE improvement [221]")
+    
+    results['baseline_corrected'] = apply_baseline_correction(
+        spectra, 
+        method=baseline_method,
+        degree=baseline_degree,
+        lam=asls_lam, 
+        p=asls_p, 
+        verbose=verbose
+    )
+    
+    # Step 2: Noise Reduction
+    if verbose:
+        print(f"\n[2/3] Noise Reduction")
+    
+    if smoothing_method == 'savgol':
+        if verbose:
+            print(f"      Method: Savitzky-Golay (window={sg_window}, order={sg_order})")
+            print(f"      Justification: filter_comparison.py validation")
+            print(f"                     Optimal noise reduction + peak preservation")
+        results['smoothed'] = apply_savgol_filter(
+            results['baseline_corrected'],
+            window_length=sg_window,
+            polyorder=sg_order
+        )
+    elif smoothing_method == 'sinc': 
+        if verbose:
+            print(f"      Method: Modified Sinc (fc={sinc_fc}, M={sinc_M})")
+            print(f"      Justification: Better stopband rejection [233]")
+        results['smoothed'] = apply_modified_sinc_filter(
+            results['baseline_corrected'],
+            fc=sinc_fc,
+            M=sinc_M
+        )
+    else:
+        raise ValueError(f"Unknown smoothing method: {smoothing_method}. Use 'savgol' or 'sinc'")
+    
+    # Step 3: Normalization [237]
+    if verbose:
+        print("\n[3/3] Normalization (L2-Norm)")
+        print(f"      Justification: Bias=0.000, RMSE=0.002 [237]")
+        print(f"                     normalization_comparison.py validation")
+    
+    results['normalized'] = apply_l2_normalization(results['smoothed'])
+    
+    if verbose:
+        print("\n" + "="*70)
+        print("✓ PREPROCESSING COMPLETE")
+        print(f"  Input shape:   {spectra.shape}")
+        print(f"  Output shape: {results['normalized'].shape}")
+        print(f"  Baseline:      Polynomial degree={baseline_degree}")
+        print(f"  Smoothing:    SG window={sg_window}, order={sg_order}")
+        print(f"  Normalization: L2-Norm (unit vector)")
+        print("="*70)
+    
+    return results
+
+def preprocess_libs_spectra(
+    spectra: np.ndarray,
+    poly_degree: int = 5,
+    sg_window: int = 11,
+    sg_order: int = 3,
+    use_gaussian: bool = False,
+    gaussian_sigma: float = 1.5,
+    verbose: bool = True
+) -> Dict[str, np.ndarray]:
+    """
+    Complete LIBS preprocessing pipeline.
+    
+    Order: Baseline Correction → Noise Reduction → Normalization
+    
+    Parameters
+    ----------
+    spectra : np.ndarray
+        Raw spectral data (n_samples, n_features)
+    poly_degree : int
+        Polynomial degree for baseline correction
     sg_window : int
         Savitzky-Golay window length
-    sg_order :  int
+    sg_order : int
         Savitzky-Golay polynomial order
     use_gaussian : bool
         If True, use Gaussian filter instead of Savitzky-Golay
@@ -377,13 +819,13 @@ def preprocess_libs_spectra(
     Returns
     -------
     results : dict
-        Dictionary containing intermediate and final results: 
+        Dictionary containing intermediate and final results:
         - 'raw': Original spectra
-        - 'baseline_corrected': After AsLS
+        - 'baseline_corrected': After Polynomial correction
         - 'smoothed': After noise reduction
-        - 'normalized':  Final preprocessed spectra
+        - 'normalized': Final preprocessed spectra
     """
-    results = {'raw': spectra. copy()}
+    results = {'raw': spectra.copy()}
     
     if verbose:
         print("\n" + "="*60)
@@ -392,9 +834,9 @@ def preprocess_libs_spectra(
     
     # Step 1: Baseline Correction
     if verbose:
-        print("\n[1/3] Applying AsLS Baseline Correction...")
+        print(f"\n[1/3] Applying Polynomial Baseline Correction (degree={poly_degree})...")
     results['baseline_corrected'] = apply_baseline_correction(
-        spectra, lam=asls_lam, p=asls_p, verbose=verbose
+        spectra, degree=poly_degree, verbose=verbose
     )
     
     # Step 2: Noise Reduction
@@ -412,32 +854,37 @@ def preprocess_libs_spectra(
         )
     
     # Step 3: Normalization
-    if verbose: 
+    if verbose:
         print("\n[3/3] Applying L2 Normalization...")
     results['normalized'] = apply_l2_normalization(results['smoothed'])
     
     if verbose:
         print("\n" + "="*60)
         print("✓ PREPROCESSING COMPLETE")
-        print(f"  Input shape:   {spectra.shape}")
+        print(f"  Input shape:  {spectra.shape}")
         print(f"  Output shape: {results['normalized'].shape}")
         print("="*60)
     
     return results
 
-
 # ============================================================================
-# VALIDATION & TESTING FUNCTIONS
+# VALIDATION FUNCTIONS (Label-Free)
 # ============================================================================
 
-def validate_preprocessing(
+def validate_preprocessing_quality(
     raw:  np.ndarray,
     processed: np.ndarray,
     wavelengths: np.ndarray,
     sample_idx: int = 0
 ) -> Dict[str, float]:
     """
-    Validate preprocessing quality with quantitative metrics.
+    Validate preprocessing quality WITHOUT requiring labels.
+    
+    Metrics:
+    - SNR improvement
+    - Baseline flatness
+    - Peak preservation (correlation)
+    - Normalization verification
     
     Parameters
     ----------
@@ -445,9 +892,9 @@ def validate_preprocessing(
         Raw spectrum
     processed : np.ndarray
         Preprocessed spectrum
-    wavelengths :  np.ndarray
+    wavelengths : np.ndarray
         Wavelength values
-    sample_idx :  int
+    sample_idx : int
         Sample index for reporting
         
     Returns
@@ -457,9 +904,8 @@ def validate_preprocessing(
     """
     metrics = {}
     
-    # 1. Signal-to-Noise Ratio (SNR) improvement
-    # Estimate noise as standard deviation in a flat region
-    flat_region = slice(100, 200)  # Adjust based on your data
+    # 1. Signal-to-Noise Ratio improvement
+    flat_region = slice(100, 200)
     noise_raw = np.std(raw[flat_region])
     noise_processed = np.std(processed[flat_region])
     
@@ -471,16 +917,15 @@ def validate_preprocessing(
     
     metrics['snr_raw'] = snr_raw
     metrics['snr_processed'] = snr_processed
-    metrics['snr_improvement'] = (snr_processed - snr_raw) / snr_raw * 100 if snr_raw > 0 else 0
+    metrics['snr_improvement_pct'] = (snr_processed - snr_raw) / snr_raw * 100 if snr_raw > 0 else 0
     
-    # 2. Baseline flatness (standard deviation of baseline region)
+    # 2. Baseline flatness
     baseline_region = slice(0, 100)
     metrics['baseline_std_raw'] = np.std(raw[baseline_region])
     metrics['baseline_std_processed'] = np.std(processed[baseline_region])
     
-    # 3. Peak preservation (correlation between raw and processed)
-    # High correlation means peaks are preserved
-    metrics['peak_correlation'] = np.corrcoef(raw, processed)[0, 1]
+    # 3. Peak preservation (correlation)
+    metrics['peak_correlation'] = np. corrcoef(raw, processed)[0, 1]
     
     # 4. Normalization verification
     metrics['l2_norm'] = np.linalg.norm(processed)
@@ -490,297 +935,335 @@ def validate_preprocessing(
     metrics['dynamic_range_raw'] = np.max(raw) - np.min(raw)
     metrics['dynamic_range_processed'] = np.max(processed) - np.min(processed)
     
-    print(f"\n{'='*50}")
+    print(f"\n{'='*60}")
     print(f"VALIDATION METRICS (Sample {sample_idx})")
-    print(f"{'='*50}")
-    print(f"SNR Improvement:      {metrics['snr_improvement']: +.1f}%")
-    print(f"Baseline Std (raw):  {metrics['baseline_std_raw']:.4f}")
-    print(f"Baseline Std (proc): {metrics['baseline_std_processed']:.6f}")
-    print(f"Peak Correlation:    {metrics['peak_correlation']:.4f}")
-    print(f"L2 Norm:             {metrics['l2_norm']:.6f} (normalized: {metrics['is_normalized']})")
-    print(f"{'='*50}")
+    print(f"{'='*60}")
+    print(f"SNR Improvement:       {metrics['snr_improvement_pct']:+.1f}%")
+    print(f"Baseline Std (raw):   {metrics['baseline_std_raw']:.4f}")
+    print(f"Baseline Std (proc):  {metrics['baseline_std_processed']:.6f}")
+    print(f"Peak Correlation:     {metrics['peak_correlation']:.4f}")
+    print(f"L2 Norm:              {metrics['l2_norm']:.6f} (normalized: {metrics['is_normalized']})")
+    print(f"{'='*60}")
     
     return metrics
 
 
-def compare_smoothing_methods(
-    spectra_baseline: np.ndarray,
-    wavelengths: np.ndarray,
-    sample_idx: int = 0
-) -> Dict[str, np.ndarray]:
-    """
-    Compare Savitzky-Golay vs Gaussian smoothing as recommended in methodology.
-    
-    The context document notes:  "Test both SG AND Modified Sinc filter. 
-    If alternative improves accuracy >2%, use it."
-    
-    Parameters
-    ----------
-    spectra_baseline : np.ndarray
-        Baseline-corrected spectra
-    wavelengths : np.ndarray
-        Wavelength values
-    sample_idx : int
-        Sample to visualize
-        
-    Returns
-    -------
-    results : dict
-        Smoothed spectra from each method
-    """
-    sample = spectra_baseline[sample_idx]
-    
-    results = {
-        'original': sample,
-        'savgol_7_2': savgol_filter(sample, 7, 2),
-        'savgol_11_3': savgol_filter(sample, 11, 3),  # Default
-        'savgol_15_3': savgol_filter(sample, 15, 3),
-        'gaussian_1. 0': gaussian_filter1d(sample, sigma=1.0),
-        'gaussian_1.5': gaussian_filter1d(sample, sigma=1.5),
-        'gaussian_2.0': gaussian_filter1d(sample, sigma=2.0),
-    }
-    
-    # Calculate noise reduction for each
-    print("\n" + "="*60)
-    print("SMOOTHING METHOD COMPARISON")
-    print("="*60)
-    print(f"{'Method':<20} {'Noise Std':<12} {'Peak Max':<12} {'Peak Preserved'}")
-    print("-"*60)
-    
-    flat_region = slice(100, 200)
-    original_noise = np.std(sample[flat_region])
-    original_peak = np.max(sample)
-    
-    for name, smoothed in results.items():
-        noise = np.std(smoothed[flat_region])
-        peak = np.max(smoothed)
-        peak_preserved = peak / original_peak * 100
-        print(f"{name:<20} {noise:<12.6f} {peak:<12.4f} {peak_preserved:. 1f}%")
-    
-    print("="*60)
-    print("Recommendation: Choose method with lowest noise AND >95% peak preservation")
-    
-    return results
-
-
 def plot_preprocessing_stages(
     results: Dict[str, np.ndarray],
-    wavelengths: np.ndarray,
     sample_idx: int = 0,
     save_path: Optional[str] = None
 ) -> None:
     """
-    Visualize all preprocessing stages for validation.
+    Visualize all preprocessing stages. 
     
     Parameters
     ----------
     results : dict
-        Output from preprocess_libs_spectra()
-    wavelengths : np. ndarray
-        Wavelength values in nm
+        Output from preprocess_irish_soil_spectra() containing 'wavelengths'
     sample_idx : int
-        Sample index to plot
+        Sample index to plot (default: 0 = first sample)
     save_path : str, optional
         Path to save figure
     """
+    # Extract wavelengths and sample name from results
+    wavelengths = results['wavelengths']
+    sample_name = results['sample_names'][sample_idx]
+    
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     
     stages = ['raw', 'baseline_corrected', 'smoothed', 'normalized']
     titles = [
         'Step 0: Raw Spectrum',
-        'Step 1: After AsLS Baseline Correction',
-        'Step 2: After Savitzky-Golay Smoothing',
+        'Step 1: After Polynomial(deg=5) Baseline Correction',
+        'Step 2: After Savitzky-Golay(w=7,o=2) Smoothing',
         'Step 3: After L2 Normalization (FINAL)'
     ]
     
     for ax, stage, title in zip(axes.flat, stages, titles):
         spectrum = results[stage][sample_idx]
-        ax. plot(wavelengths, spectrum, 'b-', linewidth=0.5)
+        ax.plot(wavelengths, spectrum, 'b-', linewidth=0.5)
         ax.set_xlabel('Wavelength (nm)')
         ax.set_ylabel('Intensity (a.u.)')
         ax.set_title(title)
         ax.grid(True, alpha=0.3)
         
-        # Add statistics annotation
+        # Statistics annotation
         stats_text = f"Max: {np.max(spectrum):.4f}\nMean: {np.mean(spectrum):.4f}\nStd: {np.std(spectrum):.4f}"
-        ax.text(0.98, 0.98, stats_text, transform=ax.transAxes, 
+        ax.text(0.98, 0.98, stats_text, transform=ax.transAxes,
                 verticalalignment='top', horizontalalignment='right',
                 fontsize=9, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
-    plt.suptitle(f'LIBS Preprocessing Pipeline - Sample {sample_idx}', fontsize=14, fontweight='bold')
+    plt.suptitle(f'Irish Soil LIBS Preprocessing - {sample_name}', fontsize=14, fontweight='bold')
     plt.tight_layout()
     
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"Figure saved to: {save_path}")
+        print(f"✓ Figure saved to:   {save_path}")
     
     plt.show()
 
-
-def plot_class_comparison(
-    spectra: np. ndarray,
-    labels: np.ndarray,
-    wavelengths: np.ndarray,
-    n_samples_per_class: int = 5
+def plot_sample_comparison(
+    spectra: np.ndarray,
+    sample_names: np.ndarray,
+    wavelengths:  np.ndarray,
+    n_samples: int = 10,
+    save_path: Optional[str] = None
 ) -> None:
     """
-    Plot preprocessed spectra grouped by class for visual validation.
-    
-    This helps verify that preprocessing preserves class-discriminative features.
+    Plot multiple preprocessed spectra for visual inspection.
     
     Parameters
     ----------
-    spectra : np.ndarray
+    spectra : np. ndarray
         Preprocessed spectra
-    labels : np. ndarray
-        Class labels
+    sample_names : np.ndarray
+        Sample identifiers
     wavelengths : np.ndarray
         Wavelength values
-    n_samples_per_class :  int
-        Number of samples to plot per class
+    n_samples : int
+        Number of samples to plot
+    save_path : str, optional
+        Path to save figure
     """
-    unique_classes = np.unique(labels)
-    n_classes = len(unique_classes)
+    fig, ax = plt.subplots(figsize=(14, 6))
     
-    fig, axes = plt.subplots(n_classes, 1, figsize=(14, 4*n_classes), sharex=True)
-    if n_classes == 1:
-        axes = [axes]
+    # Plot first n samples
+    for i in range(min(n_samples, len(spectra))):
+        ax.plot(wavelengths, spectra[i], alpha=0.5, linewidth=0.5, label=sample_names[i])
     
-    colors = plt.cm.tab10(np.linspace(0, 1, n_classes))
+    # Plot mean spectrum
+    mean_spectrum = np.mean(spectra, axis=0)
+    ax.plot(wavelengths, mean_spectrum, 'k-', linewidth=2, label='Mean Spectrum')
     
-    for ax, cls, color in zip(axes, unique_classes, colors):
-        cls_indices = np.where(labels == cls)[0][:n_samples_per_class]
-        
-        for idx in cls_indices:
-            ax.plot(wavelengths, spectra[idx], color=color, alpha=0.5, linewidth=0.5)
-        
-        # Plot mean spectrum
-        mean_spectrum = np.mean(spectra[labels == cls], axis=0)
-        ax.plot(wavelengths, mean_spectrum, color='black', linewidth=2, label=f'Class {cls} Mean')
-        
-        ax.set_ylabel('Intensity (normalized)')
-        ax.set_title(f'Class:  {cls} (n={len(np.where(labels == cls)[0])})')
-        ax.legend(loc='upper right')
-        ax.grid(True, alpha=0.3)
+    ax.set_xlabel('Wavelength (nm)', fontsize=12)
+    ax.set_ylabel('Normalized Intensity', fontsize=12)
+    ax.set_title('Preprocessed Irish Soil LIBS Spectra', fontsize=14, fontweight='bold')
+    ax.legend(loc='upper right', fontsize=8)
+    ax.grid(True, alpha=0.3)
     
-    axes[-1].set_xlabel('Wavelength (nm)')
-    plt.suptitle('Preprocessed Spectra by Class', fontsize=14, fontweight='bold')
     plt.tight_layout()
+    
+    if save_path:
+        plt. savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"✓ Figure saved to:  {save_path}")
+    
     plt.show()
 
 
 # ============================================================================
-# MAIN EXECUTION EXAMPLE
+# SAVE/LOAD FUNCTIONS
+# ============================================================================
+
+def save_preprocessed_data(
+    results: Dict[str, np.ndarray],
+    nutrient_labels: Optional[np.ndarray] = None,
+    contaminant_labels: Optional[np.ndarray] = None,
+    output_path: str = "irish_soil_preprocessed.npz"
+) -> None:
+    """
+    Save preprocessed data AND labels to compressed NumPy file.
+    
+    Parameters
+    ----------
+    results : dict
+        Output from preprocess_irish_soil_spectra()
+    nutrient_labels : np.ndarray, optional
+        Nutrient level labels (High/Med/Low)
+    contaminant_labels : np.ndarray, optional
+        Contaminant detection labels (Clean/Contaminated)
+    output_path : str
+        Output file path
+    """
+    save_dict = {
+        'raw':  results['raw'],
+        'baseline_corrected': results['baseline_corrected'],
+        'smoothed': results['smoothed'],
+        'normalized': results['normalized'],
+        'sample_names': results['sample_names'],
+        'wavelengths': results['wavelengths']
+    }
+    
+    # Add labels if provided
+    if nutrient_labels is not None:
+        save_dict['nutrient_labels'] = nutrient_labels
+    if contaminant_labels is not None: 
+        save_dict['contaminant_labels'] = contaminant_labels
+    
+    np.savez_compressed(output_path, **save_dict)
+    
+    print(f"\n{'='*70}")
+    print("PREPROCESSED DATA SAVED")
+    print(f"{'='*70}")
+    print(f"File: {output_path}")
+    print(f"Size: {os.path.getsize(output_path) / 1024 / 1024:.2f} MB")
+    print(f"\nContents:")
+    print(f"  - raw:  Raw spectra (320, 12981)")
+    print(f"  - baseline_corrected: After AsLS")
+    print(f"  - smoothed: After noise reduction")
+    print(f"  - normalized:  FINAL preprocessed (320, 12981)")
+    print(f"  - sample_names: Sample identifiers")
+    print(f"  - wavelengths: 197. 001-973.5891 nm")
+    
+    if nutrient_labels is not None: 
+        print(f"  - nutrient_labels: High/Med/Low (Objective 1)")
+    if contaminant_labels is not None: 
+        print(f"  - contaminant_labels: Clean/Contaminated (Objective 2)")
+    
+    print(f"\n{'='*70}")
+    print("READY FOR PHASE 2: Feature Selection")
+    print(f"{'='*70}")
+    print("\nObjective 1 (NPK Classification):")
+    print("  - Target: ≥85% accuracy")
+    print("  - Method:  ANOVA F-test → RF Gini Importance → RF Classifier")
+    print("  - Use: nutrient_labels (exclude -1 samples)")
+    print("\nObjective 2 (Contaminant Detection):")
+    print("  - Target: ≥90% accuracy")
+    print("  - Method: Same feature selection pipeline")
+    print("  - Use: contaminant_labels (all samples)")
+    print(f"{'='*70}")
+
+def load_preprocessed_data(filepath: str = "irish_soil_preprocessed. npz") -> Dict[str, np.ndarray]:
+    """
+    Load preprocessed data from compressed NumPy file.
+    
+    Parameters
+    ----------
+    filepath :  str
+        Path to preprocessed data file
+        
+    Returns
+    -------
+    results :  dict
+        Dictionary containing all preprocessing stages
+    """
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Preprocessed data not found:  {filepath}")
+    
+    data = np.load(filepath, allow_pickle=True)
+    
+    results = {
+        'raw': data['raw'],
+        'baseline_corrected': data['baseline_corrected'],
+        'smoothed':  data['smoothed'],
+        'normalized': data['normalized'],
+        'sample_names': data['sample_names'],
+        'wavelengths': data['wavelengths']
+    }
+    
+    print(f"✓ Loaded preprocessed data from: {filepath}")
+    print(f"  Shape: {results['normalized'].shape}")
+    
+    return results
+
+
+# ============================================================================
+# MAIN EXECUTION
 # ============================================================================
 
 if __name__ == "__main__": 
-    # -------------------------------------------------------------------------
-    # OPTION 1: Load your actual data
-    # -------------------------------------------------------------------------
-    # spectra, labels, wavelengths = load_libs_data("your_libs_data.csv")
+    print("="*70)
+    print("IRISH SOIL LIBS PREPROCESSING PIPELINE")
+    print("Phase 1: Preprocessing + Label Generation")
+    print("="*70)
+    print("\nOPTIMIZED PARAMETERS (from comparison script validation):")
+    print("  • Baseline: Polynomial degree=5 (best peak recovery + edge stability)")
+    print("  • Smoothing: SG window=7, order=2 (optimal noise/peak balance)")
+    print("  • Normalization: L2-Norm (Bias=0.000, RMSE=0.002)")
+    print("="*70)
     
     # -------------------------------------------------------------------------
-    # OPTION 2: Generate synthetic data for testing pipeline
+    # STEP 1: Load Irish Soil Dataset
     # -------------------------------------------------------------------------
-    print("Generating synthetic LIBS data for pipeline demonstration...")
-    
-    np.random.seed(42)
-    n_samples = 324
-    n_features = 12981
-    wavelengths = np.linspace(200, 950, n_features)
-    
-    # Create synthetic spectra with realistic LIBS characteristics
-    spectra = np.zeros((n_samples, n_features))
-    labels = np.repeat(['High', 'Medium', 'Low'], n_samples // 3 + 1)[:n_samples]
-    
-    for i in range(n_samples):
-        # Baseline (Bremsstrahlung continuum)
-        baseline = 1000 * np.exp(-0.005 * (wavelengths - 200))
-        
-        # Add peaks at N, P, K wavelengths (from NIST database)
-        # Nitrogen peaks:  742.4, 744.2, 746.8 nm
-        # Phosphorus peaks: 253.5, 255.3 nm
-        # Potassium peaks: 766.5, 769.9 nm
-        
-        peak_positions = [253.5, 255.3, 742.4, 744.2, 746.8, 766.5, 769.9]
-        peak_intensities = np.random.uniform(500, 2000, len(peak_positions))
-        
-        # Modify intensities based on class
-        if labels[i] == 'High':
-            peak_intensities *= 1.5
-        elif labels[i] == 'Low':
-            peak_intensities *= 0.6
-        
-        for pos, intensity in zip(peak_positions, peak_intensities):
-            idx = np.argmin(np.abs(wavelengths - pos))
-            peak = intensity * np.exp(-0.5 * ((wavelengths - pos) / 0.5)**2)
-            spectra[i] += peak
-        
-        spectra[i] += baseline
-        spectra[i] += np.random.normal(0, 50, n_features)  # Noise
-    
-    print(f"Synthetic data created:  {spectra.shape}")
-    
-    # -------------------------------------------------------------------------
-    # STEP 1: Stratified Split
-    # -------------------------------------------------------------------------
-    X_train, X_test, y_train, y_test = stratified_split(spectra, labels)
+    try:
+        spectra_raw, sample_names, wavelengths = load_irish_soil_data()
+    except FileNotFoundError as e: 
+        print(f"\n❌ ERROR: {e}")
+        print("\nPlease verify:")
+        print("  1. File path is correct")
+        print("  2. CSV file exists at the specified location")
+        print("  3. File has correct format (wavelengths in rows, samples in columns)")
+        exit(1)
+    except Exception as e:
+        print(f"\n❌ Unexpected error loading data: {e}")
+        exit(1)
     
     # -------------------------------------------------------------------------
     # STEP 2: Run Preprocessing Pipeline
     # -------------------------------------------------------------------------
-    results_train = preprocess_libs_spectra(
-        X_train,
-        asls_lam=1e6,
-        asls_p=0.01,
-        sg_window=11,
-        sg_order=3,
+    # Parameters optimized from comparison scripts: 
+    # - baseline_comparison.py → AsLS lam=1e6, p=0.01
+    # - filter_comparison.py → smoothing_method='savgol' (or 'sinc' if validated better)
+    # - normalization_comparison.py → L2-Norm
+    
+    results = preprocess_irish_soil_spectra(
+        spectra_raw,
+        sample_names,
+        wavelengths,
+        # VALIDATED OPTIMAL PARAMETERS
+        baseline_method='polynomial',  # From baseline_comparison.py
+        baseline_degree=5,              # Validated best
+        sg_window=7,                    # From filter_comparison.py
+        sg_order=2,                     # Validated best
         verbose=True
     )
-    
-    # Apply same preprocessing to test set
-    results_test = preprocess_libs_spectra(X_test, verbose=False)
-    
+
     # -------------------------------------------------------------------------
-    # STEP 3: Validation
+    # STEP 3: Validate Preprocessing Quality
     # -------------------------------------------------------------------------
-    # Validate preprocessing quality
-    metrics = validate_preprocessing(
-        raw=X_train[0],
-        processed=results_train['normalized'][0],
+    print("\nValidating preprocessing quality on sample Clay_1...")
+    metrics = validate_preprocessing_quality(
+        raw=results['raw'][0],
+        processed=results['normalized'][0],
         wavelengths=wavelengths,
-        sample_idx=0
-    )
-    
-    # Compare smoothing methods
-    smoothing_comparison = compare_smoothing_methods(
-        results_train['baseline_corrected'],
-        wavelengths,
         sample_idx=0
     )
     
     # -------------------------------------------------------------------------
     # STEP 4: Visualization
     # -------------------------------------------------------------------------
-    plot_preprocessing_stages(results_train, wavelengths, sample_idx=0)
-    plot_class_comparison(results_train['normalized'], y_train, wavelengths)
+    print("\nGenerating visualizations...")
+    
+    # Plot preprocessing stages (wavelengths now extracted from results dict)
+    plot_preprocessing_stages(
+        results,
+        sample_idx=0,
+        save_path='preprocessing_stages_sample0.png'  # Changed from Clay1
+    )
+    
+    # Plot comparison of first 10 samples
+    plot_sample_comparison(
+        results['normalized'],
+        sample_names,
+        wavelengths,  # Still pass separately here (function signature unchanged)
+        n_samples=10,
+        save_path='sample_comparison.png'
+    )
     
     # -------------------------------------------------------------------------
-    # STEP 5: Save preprocessed data for Phase 2
+    # STEP 5: Save Preprocessed Data
     # -------------------------------------------------------------------------
-    print("\n" + "="*60)
-    print("SAVING PREPROCESSED DATA")
-    print("="*60)
+    save_preprocessed_data(results, output_path="irish_soil_preprocessed.npz")
     
-    np.save('X_train_preprocessed.npy', results_train['normalized'])
-    np.save('X_test_preprocessed.npy', results_test['normalized'])
-    np.save('y_train. npy', y_train)
-    np.save('y_test.npy', y_test)
-    np.save('wavelengths.npy', wavelengths)
-    
-    print("✓ Saved:  X_train_preprocessed.npy")
-    print("✓ Saved: X_test_preprocessed.npy")
-    print("✓ Saved: y_train.npy")
-    print("✓ Saved: y_test.npy")
-    print("✓ Saved:  wavelengths.npy")
-    print("\nReady for Phase 2: Feature Selection")
+    # -------------------------------------------------------------------------
+    # NEXT STEPS
+    # -------------------------------------------------------------------------
+    print("\n" + "="*70)
+    print("NEXT STEPS")
+    print("="*70)
+    print("\n1. OBTAIN CLASSIFICATION LABELS:")
+    print("   Create 'label_map.csv' with format:")
+    print("   sample,label")
+    print("   Clay_1,High")
+    print("   Clay_2,Medium")
+    print("   ...")
+    print("\n2. PROCEED TO PHASE 2: Feature Selection")
+    print("   - NIST peak identification (N:  742. 4, 744.2, 746.8 nm)")
+    print("   - ANOVA F-test:  12,981 → ~500 features")
+    print("   - RF Gini Importance: 500 → ~100 features")
+    print("\n3. PHASE 3: Model Training (Random Forest)")
+    print("   - Target: ≥85% accuracy (vs 73. 01% PLS-DA baseline)")
+    print("   - TinyML deployment:  ≤128 KB, ≤50 ms, ≤5 mW")
+    print("\n4. Contact SETU, Ireland collaborators for:")
+    print("   - NPK concentration measurements (ground truth)")
+    print("   - Classification thresholds (High/Medium/Low)")
+    print("="*70)
