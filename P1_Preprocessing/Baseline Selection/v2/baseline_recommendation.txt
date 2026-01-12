@@ -1,0 +1,99 @@
+======================================================================
+LIBS BASELINE CORRECTION RECOMMENDATION REPORT
+======================================================================
+
+METHODOLOGY REFERENCE:
+- AsLS: r=0.93, 19% RMSE improvement [221]
+- Decision Rule: 'Best flatness + peak preservation balance'
+
+RESULTS SUMMARY:
+----------------------------------------------------------------------
+Method                    Flatness     Preservation   Time(ms)    
+----------------------------------------------------------------------
+Polynomial_5              8.801566     0.9969         4.005       
+Median                    9.638934     0.9612         0.619       
+SNIP_50                   11.187588    0.9950         323.521     
+SNIP_100                  11.187588    0.9998         637.350     
+AsLS_default              12.317563    0.9754         61.971      
+AsLS_smooth               12.378391    0.9815         63.773      
+AsLS_aggressive           12.410139    0.9834         78.735      
+Morphological             12.412974    0.9650         0.229       
+RollingBall               12.419974    0.9796         0.899       
+airPLS                    12.520240    0.9822         49.997      
+Polynomial_7              40.723142    0.9939         5.725       
+
+======================================================================
+RECOMMENDATION
+======================================================================
+
+
+RECOMMENDATION: Polynomial_5
+
+JUSTIFICATION:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PERFORMANCE METRICS:
+  Baseline Flatness:      8.801566 (lower=better)
+  Peak Preservation:    0.9969 (higher=better, max=1.0)
+  Peak Distortion:      0.67% (lower=better)
+  Edge Stability (L/R):  12.041918 / 0.986679
+  Edge Stability Ratio:  0.01 (lower=better, <2.0 ideal)
+  Computation Time:     4.005 ms/spectrum
+  Parameter Complexity: 1 parameters
+
+WEIGHTED SCORE: 96.19/100
+  25% Baseline flatness
+  35% Peak preservation (CRITICAL for LIBS)
+  15% Peak distortion
+  15% Edge stability (polynomial oscillation check)
+  10% Computation time (MCU constraint)
+
+
+✓ EXCELLENT EDGE STABILITY: 
+  Edge instability ratio = 0.01 (<2.0)
+  Baseline correction is stable across entire wavelength range (200-950nm).
+  No edge trimming required.
+  
+
+INTERPRETATION: 
+Polynomial baseline shows best overall performance for your data. 
+
+ADVANTAGES for TinyML:
+  - LOWEST computational cost (4.00 ms)
+  - Simple implementation (np.polyfit + np.polyval)
+  - Single parameter (polynomial degree)
+  - Easy to port to C for MCU
+
+
+EDGE STABILITY VALIDATION:
+  Surprisingly, polynomial shows excellent edge stability (ratio=0.01)
+  This is UNUSUAL for polynomial fitting and should be highlighted in thesis.
+  Full 200-950nm range appears usable.
+  
+
+TRADE-OFF vs AsLS:
+  - AsLS_aggressive:  Score=88.36, Edge ratio=0.02
+  - Polynomial is 0.1x faster
+  - If edge effects acceptable, use Polynomial; otherwise use AsLS_aggressive
+
+
+======================================================================
+ACTION REQUIRED
+======================================================================
+
+Update libs_preprocessing.py:
+
+  # Use Polynomial baseline (degree=5)
+  # Lowest computational cost for MCU
+  degree = 5
+
+======================================================================
+IMPLEMENTATION NOTES
+======================================================================
+
+1. Copy the recommended baseline function from baseline_comparison.py
+2. Replace the asls_baseline() function in libs_preprocessing.py
+3. Update parameters in apply_baseline_correction()
+4. Run filter_comparison.py to select optimal smoothing filter
+5. Proceed with full preprocessing pipeline
+

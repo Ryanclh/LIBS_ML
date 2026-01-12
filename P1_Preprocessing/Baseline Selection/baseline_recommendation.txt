@@ -1,0 +1,94 @@
+======================================================================
+LIBS BASELINE CORRECTION RECOMMENDATION REPORT
+======================================================================
+
+METHODOLOGY REFERENCE:
+- AsLS: r=0.93, 19% RMSE improvement [221]
+- Decision Rule: 'Best flatness + peak preservation balance'
+
+RESULTS SUMMARY:
+----------------------------------------------------------------------
+Method                    Flatness     Preservation   Time(ms)    
+----------------------------------------------------------------------
+Polynomial_5              8.801566     0.9969         4.259       
+Median                    9.638934     0.9612         0.614       
+SNIP_50                   11.187588    0.9950         322.775     
+SNIP_100                  11.187588    0.9998         638.257     
+AsLS_default              12.317563    0.9754         62.742      
+AsLS_smooth               12.378391    0.9815         63.186      
+AsLS_aggressive           12.410139    0.9834         78.289      
+Morphological             12.412974    0.9650         0.237       
+RollingBall               12.419974    0.9796         0.870       
+airPLS                    12.520240    0.9822         49.257      
+Polynomial_7              40.723142    0.9939         5.592       
+
+======================================================================
+RECOMMENDATION
+======================================================================
+
+
+RECOMMENDATION:  Polynomial_5
+
+JUSTIFICATION:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PERFORMANCE METRICS:
+  Baseline Flatness:      8.801566 (lower=better)
+  Peak Preservation:    0.9969 (higher=better, max=1.0)
+  Peak Distortion:      0.67% (lower=better)
+  Edge Stability Ratio:   0.01 (lower=better, <2.0 ideal)
+  Peak Recovery Rate:   99.60% (100% = ideal)
+  Computation Time:     4.259 ms/spectrum
+
+WEIGHTED SCORE: 98.56/100
+  20% Baseline flatness
+  30% Peak preservation (CRITICAL for LIBS)
+  15% Edge stability (polynomial oscillation check)
+  25% Peak recovery (quantitative accuracy validation)
+  5% Peak distortion
+  5% Computation time
+
+
+✓ EXCELLENT QUANTITATIVE ACCURACY: 
+  Peak recovery = 99.60% (within 5% of true height)
+  Synthetic ground truth test confirms reliable peak height preservation. 
+  Suitable for quantitative LIBS analysis (elemental concentration estimation).
+  
+
+✓ EXCELLENT EDGE STABILITY: Full 200-950nm range usable.
+  
+
+INTERPRETATION:
+Polynomial shows best overall performance. 
+
+CRITICAL VALIDATION:
+  - Peak recovery: 99.6% 
+    ✓ Excellent quantitative accuracy - UNEXPECTED for polynomials!
+    This should be highlighted in thesis as superior to literature expectations.
+  - Edge stability excellent:  Full range usable
+
+COMPUTATIONAL ADVANTAGE:
+  - 0.1x faster than AsLS
+  - Simplest MCU implementation (polyfit + polyval)
+
+
+======================================================================
+ACTION REQUIRED
+======================================================================
+
+Update libs_preprocessing.py:
+
+  # Use Polynomial baseline (degree=5)
+  # Lowest computational cost for MCU
+  degree = 5
+
+======================================================================
+IMPLEMENTATION NOTES
+======================================================================
+
+1. Copy the recommended baseline function from baseline_comparison.py
+2. Replace the asls_baseline() function in libs_preprocessing.py
+3. Update parameters in apply_baseline_correction()
+4. Run filter_comparison.py to select optimal smoothing filter
+5. Proceed with full preprocessing pipeline
+

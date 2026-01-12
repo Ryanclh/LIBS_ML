@@ -1,0 +1,84 @@
+======================================================================
+LIBS BASELINE CORRECTION RECOMMENDATION REPORT
+======================================================================
+
+METHODOLOGY REFERENCE:
+- AsLS: r=0.93, 19% RMSE improvement [221]
+- Decision Rule: 'Best flatness + peak preservation balance'
+
+RESULTS SUMMARY:
+----------------------------------------------------------------------
+Method                    Flatness     Preservation   Time(ms)    
+----------------------------------------------------------------------
+Polynomial_5              8.801566     0.9969         4.277       
+Median                    9.638934     0.9612         0.619       
+SNIP_50                   11.187588    0.9950         323.954     
+SNIP_100                  11.187588    0.9998         638.149     
+AsLS_default              12.317563    0.9754         72.800      
+AsLS_smooth               12.378391    0.9815         66.810      
+AsLS_aggressive           12.410139    0.9834         78.611      
+Morphological             12.412974    0.9650         0.257       
+RollingBall               12.419974    0.9796         0.930       
+airPLS                    12.520240    0.9822         49.942      
+Polynomial_7              40.723142    0.9939         5.736       
+
+======================================================================
+RECOMMENDATION
+======================================================================
+
+
+RECOMMENDATION: Polynomial_5
+
+JUSTIFICATION:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PERFORMANCE METRICS:
+  Baseline Flatness:      8.801566 (lower=better)
+  Peak Preservation:    0.9969 (higher=better, max=1.0)
+  Peak Distortion:      0.67% (lower=better)
+  Computation Time:     4.277 ms/spectrum
+  Parameter Complexity: 1 parameters
+
+WEIGHTED SCORE: 94.96/100
+  30% Baseline flatness
+  40% Peak preservation (CRITICAL for LIBS analysis)
+  20% Peak distortion
+  10% Computation time (MCU constraint)
+
+
+INTERPRETATION: 
+Polynomial baseline shows best overall performance for your data. 
+
+ADVANTAGES for TinyML:
+  - LOWEST computational cost (4.28 ms)
+  - Simple implementation (np.polyfit + np.polyval)
+  - Single parameter (polynomial degree)
+  - Easy to port to C for MCU
+
+TRADE-OFF:
+  - May not handle complex baseline shapes as well as AsLS
+  - Literature precedent weaker than AsLS [221]
+
+RECOMMENDATION:  Use this IF computational cost is critical, otherwise use AsLS_aggressive
+
+
+======================================================================
+ACTION REQUIRED
+======================================================================
+
+Update libs_preprocessing.py:
+
+  # Use Polynomial baseline (degree=5)
+  # Lowest computational cost for MCU
+  degree = 5
+
+======================================================================
+IMPLEMENTATION NOTES
+======================================================================
+
+1. Copy the recommended baseline function from baseline_comparison.py
+2. Replace the asls_baseline() function in libs_preprocessing.py
+3. Update parameters in apply_baseline_correction()
+4. Run filter_comparison. py to select optimal smoothing filter
+5. Proceed with full preprocessing pipeline
+

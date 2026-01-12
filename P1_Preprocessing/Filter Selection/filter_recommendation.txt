@@ -1,0 +1,90 @@
+======================================================================
+LIBS SMOOTHING FILTER RECOMMENDATION REPORT
+======================================================================
+
+METHODOLOGY REFERENCE:
+- Schmid 2022 [233]:  'SG filters should be replaced'
+- Decision Rule: 'If alternative improves accuracy >2%, use it'
+
+RESULTS SUMMARY:
+----------------------------------------------------------------------
+Filter                    Accuracy     Noise Red.   Peak Pres.   Stopband    
+----------------------------------------------------------------------
+SG_w7_o2                  0.00%       +34.9%       79.2%       14.3 dB
+SG_w11_o3                 0.00%       +45.3%       60.1%       17.8 dB
+SG_w15_o3                 0.00%       +51.7%       47.7%       20.8 dB
+SG_w21_o4                 0.00%       +49.4%       52.0%       21.9 dB
+MS_fc0. 05_M11            0.00%       +48.5%       62.4%       32.4 dB
+MS_fc0.10_M11             0.00%       +46.2%       66.3%       26.1 dB
+MS_fc0.10_M15             0.00%       +49.9%       59.8%       38.9 dB
+MS_fc0.15_M11             0.00%       +42.3%       72.5%       19.7 dB
+MS_Hamming_fc0.10         0.00%       +49.2%       61.0%       36.2 dB
+Gaussian_s1. 0            0.00%       +39.1%       77.0%       13.9 dB
+Gaussian_s1.5             0.00%       +47.6%       64.2%       26.9 dB
+Gaussian_s2.0             0.00%       +53.0%       54.6%       42.2 dB
+
+======================================================================
+RECOMMENDATION
+======================================================================
+
+Best SG: SG_w7_o2 (score=46.85)
+Best MS: MS_fc0.10_M15 (score=48.93)
+Best Gaussian: Gaussian_s2.0 (score=48.36)
+
+Stopband attenuation (MS vs SG): +24.6 dB
+
+RECOMMENDATION: MS_fc0.10_M15
+
+SPECTRAL QUALITY METRICS:
+- Peak Preservation:     59.8% (weight: 40%)
+- Noise Reduction:      +49.9% (weight: 30%)
+- Stopband Attenuation: 38.9 dB (weight: 20%)
+- SNR Improvement:      +22.8% (weight: 10%)
+- Computation Time:     0.248 ms/spectrum
+
+INTERPRETATION:
+Modified Sinc filter shows best overall spectral quality.
+This supports Schmid 2022 [233]:  'SG filters should be replaced'
+Stopband rejection advantage: +24.6 dB over SG
+
+BENEFIT for TinyML:
+Better noise suppression → cleaner features → potentially higher accuracy
+
+NOTE:  Classification accuracy comparison requires label_map.csv
+      This recommendation is based on spectral quality metrics only.
+
+======================================================================
+ACTION REQUIRED
+======================================================================
+
+Update libs_preprocessing.py with:
+
+  smoothing_method = 'sinc'
+  sinc_fc = 0.10
+  sinc_M = 15
+
+======================================================================
+IMPLEMENTATION GUIDE FOR libs_preprocessing.py
+======================================================================
+
+1.  Locate the preprocess_libs_spectra() function
+2. Update default parameters based on recommendation above
+3. Run preprocessing pipeline with new filter settings
+4. Validate on your 320 samples (Clay_1... Clay_320)
+5. Proceed to Phase 2: Feature Selection using NIST peaks
+
+NIST SPECTRAL LINES FOR NPK (197. 001-973.5891 nm range):
+----------------------------------------------------------------------
+Nitrogen (N):   742.364, 744.229, 746.831 nm (primary)
+                821.634, 824.238, 868.028 nm (secondary)
+Phosphorus (P): 253.565, 255.328 nm (YOUR RANGE - use these! )
+                213.618, 214.914 nm (below 197 nm - not captured)
+Potassium (K):  766.491, 769.896 nm (primary - very strong)
+                404.414, 404.721 nm (secondary)
+
+NOTE: Your wavelength range (197.001-973.5891 nm) captures:
+  - All N lines (742-868 nm)
+  - All K lines (404-769 nm)
+  - P 253-255 nm lines (Al-Juboori et al. used these)
+  - Missing P 213-214 nm (below spectrometer range)
+
