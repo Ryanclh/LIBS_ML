@@ -21,7 +21,17 @@ import warnings
 import time
 from dataclasses import dataclass
 import os
+import sys
+sys.path.append(os.path.dirname(__file__))
 
+# Try to import label generation functions
+try:
+    from generate_labels import get_nutrient_label, get_contaminant_label
+    ENABLE_CLASSIFICATION = True
+except ImportError: 
+    print("⚠️ Warning: Could not import label generation functions from generate_labels.py")
+    print("   Classification evaluation will be disabled.")
+    ENABLE_CLASSIFICATION = False
 warnings.filterwarnings('ignore')
 
 # ============================================================================
@@ -173,7 +183,7 @@ def no_normalization(spectrum: np.ndarray) -> np.ndarray:
 class NormalizationMetrics:
     """Container for normalization evaluation metrics."""
     name: str
-    bias: float                      # Absolute bias from expected value (lower=better)
+    bias:  float                      # Absolute bias from expected value (lower=better)
     rmse: float                      # Root mean squared error (lower=better)
     peak_preservation: float         # Correlation with original peaks (higher=better)
     inter_sample_variance: float     # Variance across samples (stability metric)
@@ -182,6 +192,7 @@ class NormalizationMetrics:
     computation_time_ms: float       # Processing speed (lower=better)
     numerical_stability: bool        # No NaN/Inf values
     peak_ratio_preservation: float   # Preservation of peak height ratios (higher=better)
+    classification_accuracy: float   # NEW: Classification accuracy (higher=better)
 
 
 def calculate_bias(normalized:  np.ndarray, expected_mean: float = 0.0) -> float:
@@ -357,27 +368,65 @@ def test_ratio_preservation(
 def compare_normalization_methods(
     spectra: np.ndarray,
     wavelengths: np.ndarray,
+    sample_names: np.ndarray = None,  # NEW: Optional for classification
+    objective: str = 'nutrient',      # NEW: 'nutrient' or 'contaminant'
     verbose: bool = True
 ) -> Dict[str, NormalizationMetrics]:
     """
-    Comprehensive comparison of normalization methods. 
+    Comprehensive comparison INCLUDING optional classification evaluation.
+    
+    All existing metrics preserved: 
+    - Bias, RMSE vs L2 gold standard
+    - Peak preservation and peak ratio preservation
+    - Inter-sample and intra-sample variance
+    - Dynamic range and numerical stability
+    - NEW: Classification accuracy (if sample_names provided)
     
     Parameters
     ----------
-    spectra :  np.ndarray
+    spectra : np.ndarray
         Baseline-corrected spectra (n_samples, n_features)
     wavelengths : np.ndarray
         Wavelength values
+    sample_names : np.ndarray, optional
+        Sample identifiers for label generation (enables classification)
+    objective : str
+        'nutrient' (NPK High/Med/Low) or 'contaminant' (Clean/Contaminated)
     verbose : bool
         Print progress
         
     Returns
     -------
     results : Dict[str, NormalizationMetrics]
-        Metrics for each method
+        All metrics INCLUDING classification_accuracy
     """
     
-    # Method configurations
+    # NEW: Generate labels if sample names provided
+    y_encoded = None
+    if sample_names is not None and ENABLE_CLASSIFICATION:
+        if objective == 'nutrient':
+            labels_raw = np.array([get_nutrient_label(name) for name in sample_names])
+            valid_mask = labels_raw != -1
+            spectra = spectra[valid_mask]
+            labels = labels_raw[valid_mask]
+            print(f"\n✓ Classification enabled:  Nutrient classification (High/Med/Low)")
+            print(f"  Usable samples: {len(labels)} (excluded {np.sum(~valid_mask)} contaminated)")
+        elif objective == 'contaminant': 
+            labels = np.array([get_contaminant_label(name) for name in sample_names])
+            print(f"\n✓ Classification enabled: Contaminant detection (Clean/Contaminated)")
+            print(f"  Total samples: {len(labels)}")
+        else:
+            raise ValueError(f"Unknown objective: {objective}")
+        
+        from sklearn.preprocessing import LabelEncoder
+        le = LabelEncoder()
+        y_encoded = le.fit_transform(labels)
+    else:
+        if verbose and sample_names is None:
+            print("\n⚠️ Sample names not provided - classification disabled")
+            print("   All other metrics will be calculated\n")
+    
+    # Method configurations (UNCHANGED - all existing methods preserved)
     methods = {
         'L2_Norm': {
             'func': l2_normalization,
@@ -387,19 +436,19 @@ def compare_normalization_methods(
             'func': l1_normalization,
             'description': 'L1 (Total Area) - EMSLIBS:  Reduced matrix effect'
         },
-        'SNV':  {
-            'func': snv_normalization,
-            'description': 'Standard Normal Variate - WARNING [237]: RMSE=0.220 (WORST)'
+        'SNV': {
+            'func':  snv_normalization,
+            'description': 'Standard Normal Variate - WARNING [237]:  RMSE=0.220 (WORST)'
         },
         'MinMax': {
-            'func': minmax_normalization,
+            'func':  minmax_normalization,
             'description': 'Min-Max [0,1] scaling'
         },
         'Z-Score': {
             'func':  zscore_normalization,
             'description': 'Z-score standardization'
         },
-        'Max_Peak': {
+        'Max_Peak':  {
             'func': max_normalization,
             'description': 'Max peak normalization'
         },
@@ -418,18 +467,19 @@ def compare_normalization_methods(
     
     if verbose:
         print("\n" + "="*70)
-        print("NORMALIZATION METHOD COMPARISON")
-        print("Justification: L2-Norm Bias=0.000, RMSE=0.002 [237]")
+        mode = "WITH CLASSIFICATION" if y_encoded is not None else "SPECTRAL QUALITY ONLY"
+        print(f"NORMALIZATION METHOD COMPARISON ({mode})")
+        print("All metrics:  Bias, RMSE, Peak Preservation, Ratio Preservation,")
+        print("            Inter/Intra Variance" + (" + Classification" if y_encoded is not None else ""))
         print("="*70)
-        print(f"\nTesting on {n_samples} spectra...")
-        print("Metrics:  Bias, RMSE, Peak preservation, Ratio preservation\n")
+        print(f"Testing on {n_samples} spectra...")
     
-    # Generate L2-normalized reference (gold standard)
+    # Generate L2-normalized reference (gold standard) - PRESERVED
     reference_spectra = np.array([l2_normalization(s) for s in spectra])
     
     for name, config in methods.items():
         if verbose:
-            print(f"Evaluating:  {name}...")
+            print(f"\nEvaluating:  {name}...")
             print(f"  {config['description']}")
         
         # Apply normalization to all spectra
@@ -443,18 +493,16 @@ def compare_normalization_methods(
             has_inf = np.any(np.isinf(normalized_spectra))
             numerical_stability = not (has_nan or has_inf)
             
-            if not numerical_stability:
-                if verbose:
-                    print(f"  ⚠️ WARNING: Numerical instability detected (NaN/Inf)")
+            if not numerical_stability and verbose:
+                print(f"  ⚠️ WARNING: Numerical instability detected (NaN/Inf)")
         except Exception as e:
             if verbose:
                 print(f"  ⚠️ ERROR: {e}")
-            # Create dummy results
             normalized_spectra = spectra.copy()
             elapsed_ms = 0
             numerical_stability = False
         
-        # Calculate metrics
+        # Calculate all existing spectral quality metrics (PRESERVED)
         bias_scores = []
         rmse_scores = []
         peak_pres_scores = []
@@ -467,12 +515,12 @@ def compare_normalization_methods(
             reference = reference_spectra[i]
             
             # Expected mean depends on method
-            if name == 'SNV' or name == 'Z-Score' or name == 'Mean_Center':
+            if name in ['SNV', 'Z-Score', 'Mean_Center']:
                 expected_mean = 0.0
             elif name == 'MinMax':
                 expected_mean = 0.5
             else:
-                expected_mean = np.mean(normalized)  # Self-referential for L1/L2
+                expected_mean = np.mean(normalized)
             
             bias_scores.append(calculate_bias(normalized, expected_mean))
             rmse_scores.append(calculate_rmse(original, normalized, reference))
@@ -487,10 +535,10 @@ def compare_normalization_methods(
             # Dynamic range
             dynamic_ranges.append(np.max(normalized) - np.min(normalized))
         
-        # Inter-sample variance
+        # Inter-sample variance (PRESERVED)
         inter_sample_var = calculate_inter_sample_variance(normalized_spectra[: 50])
         
-        # Peak ratio preservation test
+        # Peak ratio preservation test (PRESERVED)
         if verbose:
             print(f"  Running peak ratio preservation test...")
         
@@ -500,7 +548,24 @@ def compare_normalization_methods(
             n_tests=10
         )
         
-        # Store results
+        # NEW: Classification accuracy evaluation (if labels available)
+        classification_accuracy = 0.0
+        if y_encoded is not None:
+            # Random Forest classifier (Context Feeder [302]:  94.9%, 128KB)
+            from sklearn.ensemble import RandomForestClassifier
+            from sklearn.model_selection import StratifiedKFold, cross_val_score
+            
+            rf = RandomForestClassifier(
+                n_estimators=100,
+                max_depth=8,
+                random_state=42,
+                n_jobs=-1
+            )
+            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+            cv_scores = cross_val_score(rf, normalized_spectra, y_encoded, cv=cv, scoring='accuracy')
+            classification_accuracy = np.mean(cv_scores) * 100
+        
+        # Store results (ALL METRICS)
         results[name] = NormalizationMetrics(
             name=name,
             bias=np.mean(bias_scores),
@@ -511,18 +576,20 @@ def compare_normalization_methods(
             dynamic_range=np.mean(dynamic_ranges),
             computation_time_ms=elapsed_ms,
             numerical_stability=numerical_stability,
-            peak_ratio_preservation=mean_ratio_pres
+            peak_ratio_preservation=mean_ratio_pres,
+            classification_accuracy=classification_accuracy  # NEW
         )
         
         if verbose:
             m = results[name]
-            print(f"  Bias:                 {m.bias:.6f} (lower=better)")
+            print(f"  Bias:                  {m.bias:.6f} (lower=better)")
             print(f"  RMSE vs L2:          {m.rmse:.6f} (lower=better)")
             print(f"  Peak Preservation:   {m.peak_preservation:.4f} (higher=better)")
             print(f"  Peak Ratio Preserv.:  {m.peak_ratio_preservation:.4f} (±{std_ratio_pres:.4f})")
             print(f"  Inter-sample Var:    {m.inter_sample_variance:.6f} (lower=better)")
-            print(f"  Dynamic Range:       {m.dynamic_range:.4f}")
-            print(f"  Numerical Stability: {m.numerical_stability}")
+            if y_encoded is not None: 
+                print(f"  Classification:       {m.classification_accuracy:.2f}% ✓")
+            print(f"  Numerical Stability:  {m.numerical_stability}")
             
             if name == 'SNV' and m.rmse > 0.1:
                 print(f"  ⚠️ WARNING:  High RMSE confirms [237] - SNV is WORST performer")
@@ -530,7 +597,6 @@ def compare_normalization_methods(
             print()
     
     return results
-
 
 def generate_recommendation(results: Dict[str, NormalizationMetrics]) -> Tuple[str, str]:
     """
@@ -689,17 +755,16 @@ RECOMMENDATION:
 
 
 def plot_normalization_comparison(
-    spectrum:  np.ndarray,
+    spectrum:   np.ndarray,
     wavelengths: np.ndarray,
-    results: Dict[str, NormalizationMetrics],
-    recommended: str,
+    results:  Dict[str, NormalizationMetrics],
+    recommended:  str,
     save_path: Optional[str] = None
 ) -> None:
     """Visualize normalization comparison across TWO figures."""
     
-    # Select representative methods
+    # Select representative methods - EXCLUDE 'None' from spectral plots
     plot_methods = {
-        'None': ('No Normalization', 'gray'),
         'L2_Norm': ('L2-Norm (Recommended)', 'blue'),
         'L1_Norm': ('L1-Norm', 'green'),
         'SNV': ('SNV (WARNING)', 'red'),
@@ -707,28 +772,32 @@ def plot_normalization_comparison(
         'Max_Peak': ('Max Peak', 'purple')
     }
     
+    # Keep 'None' only for comparison plots
+    all_methods = {
+        'None': ('No Normalization', 'gray'),
+        **plot_methods
+    }
+    
     # ========================================================================
     # FIGURE 1: SPECTRAL VISUALIZATION
     # ========================================================================
     fig1 = plt.figure(figsize=(18, 10))
-    fig1.suptitle('LIBS Normalization - Spectral Comparison\nContext Feeder [237]:   L2 Bias=0.000, RMSE=0.002 vs SNV RMSE=0.220',
+    fig1.suptitle('LIBS Normalization - Spectral Comparison\nContext Feeder [237]:    L2 Bias=0.000, RMSE=0.002 vs SNV RMSE=0.220',
                   fontsize=14, fontweight='bold', y=0.995)
     
-    # Plot 1: Normalized spectra overlay
+    # Plot 1: Normalized spectra overlay (EXCLUDE 'None')
     ax1 = fig1.add_subplot(2, 3, 1)
     
-    for method, (label, color) in plot_methods.items():
-        if method == 'None':
-            normalized = no_normalization(spectrum)
-        elif method == 'L2_Norm':
+    for method, (label, color) in plot_methods.items():  # CHANGED: use plot_methods instead of all_methods
+        if method == 'L2_Norm':
             normalized = l2_normalization(spectrum)
         elif method == 'L1_Norm':
             normalized = l1_normalization(spectrum)
         elif method == 'SNV':
             normalized = snv_normalization(spectrum)
-        elif method == 'MinMax': 
+        elif method == 'MinMax':  
             normalized = minmax_normalization(spectrum)
-        elif method == 'Max_Peak':
+        elif method == 'Max_Peak': 
             normalized = max_normalization(spectrum)
         else:
             continue
@@ -740,23 +809,22 @@ def plot_normalization_comparison(
     
     ax1.set_xlabel('Wavelength (nm)', fontsize=11)
     ax1.set_ylabel('Normalized Intensity', fontsize=11)
-    ax1.set_title('Normalized Spectra Comparison', fontweight='bold', fontsize=12)
+    ax1.set_title('Normalized Spectra Comparison\n(Excludes unnormalized for clarity)', 
+                  fontweight='bold', fontsize=12)
     ax1.legend(loc='upper right', fontsize=9)
     ax1.grid(True, alpha=0.3)
     
-    # Plot 2: Peak region zoom
+    # Plot 2: Peak region zoom (EXCLUDE 'None')
     ax2 = fig1.add_subplot(2, 3, 2)
-    peak_region = slice(5000, 5500)  # Adjust based on your peaks
+    peak_region = slice(5000, 5500)
     wl_zoom = wavelengths[peak_region]
     
-    for method, (label, color) in plot_methods.items():
-        if method == 'None': 
-            normalized = no_normalization(spectrum)
-        elif method == 'L2_Norm': 
+    for method, (label, color) in plot_methods.items():  # CHANGED
+        if method == 'L2_Norm':  
             normalized = l2_normalization(spectrum)
-        elif method == 'L1_Norm': 
+        elif method == 'L1_Norm':  
             normalized = l1_normalization(spectrum)
-        elif method == 'SNV':
+        elif method == 'SNV': 
             normalized = snv_normalization(spectrum)
         elif method == 'MinMax':
             normalized = minmax_normalization(spectrum)
@@ -771,23 +839,22 @@ def plot_normalization_comparison(
     
     ax2.set_xlabel('Wavelength (nm)', fontsize=11)
     ax2.set_ylabel('Normalized Intensity', fontsize=11)
-    ax2.set_title('Peak Region Detail', fontweight='bold', fontsize=12)
+    ax2.set_title('Peak Region Detail\n(Better visibility without unnormalized)', 
+                  fontweight='bold', fontsize=12)
     ax2.legend(loc='upper right', fontsize=9)
     ax2.grid(True, alpha=0.3)
     
-    # Plot 3: Histogram of intensity distributions
+    # Plot 3: Histogram of intensity distributions (EXCLUDE 'None')
     ax3 = fig1.add_subplot(2, 3, 3)
     
-    for method, (label, color) in plot_methods.items():
-        if method == 'None':
-            normalized = no_normalization(spectrum)
-        elif method == 'L2_Norm':
+    for method, (label, color) in plot_methods.items():  # CHANGED
+        if method == 'L2_Norm': 
             normalized = l2_normalization(spectrum)
         elif method == 'L1_Norm':
             normalized = l1_normalization(spectrum)
-        elif method == 'SNV': 
+        elif method == 'SNV':  
             normalized = snv_normalization(spectrum)
-        elif method == 'MinMax':
+        elif method == 'MinMax': 
             normalized = minmax_normalization(spectrum)
         elif method == 'Max_Peak':
             normalized = max_normalization(spectrum)
@@ -798,11 +865,12 @@ def plot_normalization_comparison(
     
     ax3.set_xlabel('Normalized Intensity', fontsize=11)
     ax3.set_ylabel('Frequency', fontsize=11)
-    ax3.set_title('Intensity Distribution', fontweight='bold', fontsize=12)
+    ax3.set_title('Intensity Distribution\n(Normalized methods only)', 
+                  fontweight='bold', fontsize=12)
     ax3.legend(loc='upper right', fontsize=8)
     ax3.grid(True, alpha=0.3)
     
-    # Plot 4-6: Method-specific characteristics
+    # Plot 4: L2 vs SNV scatter (keep as is)
     ax4 = fig1.add_subplot(2, 3, 4)
     l2_norm = l2_normalization(spectrum)
     snv_norm = snv_normalization(spectrum)
@@ -812,22 +880,23 @@ def plot_normalization_comparison(
             'r--', linewidth=2, label='Perfect agreement')
     ax4.set_xlabel('L2-Normalized Intensity', fontsize=11)
     ax4.set_ylabel('SNV-Normalized Intensity', fontsize=11)
-    ax4.set_title('L2 vs SNV Comparison', fontweight='bold', fontsize=12)
+    ax4.set_title('L2 vs SNV Point-by-Point Comparison', fontweight='bold', fontsize=12)
     ax4.legend(fontsize=9)
     ax4.grid(True, alpha=0.3)
     
-    # Plot 5: Dynamic range comparison
+    # Plot 5: Dynamic range comparison (KEEP 'None' for reference)
     ax5 = fig1.add_subplot(2, 3, 5)
-    methods_list = list(plot_methods.keys())
+    methods_list = list(all_methods.keys())  # CHANGED: use all_methods here to show comparison
     dynamic_ranges = [results[m].dynamic_range for m in methods_list if m in results]
-    colors_bar = [plot_methods[m][1] for m in methods_list if m in results]
+    colors_bar = [all_methods[m][1] for m in methods_list if m in results]
     
     bars = ax5.barh(range(len(dynamic_ranges)), dynamic_ranges, 
                    color=colors_bar, alpha=0.7, edgecolor='black')
     ax5.set_yticks(range(len(dynamic_ranges)))
-    ax5.set_yticklabels([plot_methods[m][0] for m in methods_list if m in results], fontsize=9)
+    ax5.set_yticklabels([all_methods[m][0] for m in methods_list if m in results], fontsize=9)
     ax5.set_xlabel('Dynamic Range (Max - Min)', fontsize=11)
-    ax5.set_title('Dynamic Range Comparison', fontweight='bold', fontsize=12)
+    ax5.set_title('Dynamic Range Comparison\n(Shows why normalization needed)', 
+                  fontweight='bold', fontsize=12)
     ax5.grid(True, alpha=0.3, axis='x')
     
     # Highlight recommended
@@ -836,20 +905,27 @@ def plot_normalization_comparison(
             bar.set_edgecolor('darkgreen')
             bar.set_linewidth(3)
     
-    # Plot 6: Mean vs Std scatter
+    # Add annotation explaining the scale difference
+    if 'None' in results:
+        none_range = results['None'].dynamic_range
+        l2_range = results['L2_Norm'].dynamic_range
+        ratio = none_range / l2_range
+        ax5.text(0.98, 0.02, f'Unnormalized is {ratio:.0f}× larger\nthan L2-Norm', 
+                transform=ax5.transAxes, fontsize=9, ha='right', va='bottom',
+                bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
+    
+    # Plot 6: Mean vs Std scatter (EXCLUDE 'None' or use log scale)
     ax6 = fig1.add_subplot(2, 3, 6)
     
-    for method, (label, color) in plot_methods.items():
+    for method, (label, color) in plot_methods.items():  # CHANGED: exclude 'None'
         if method not in results:
             continue
         
-        if method == 'None':
-            normalized = no_normalization(spectrum)
-        elif method == 'L2_Norm':
+        if method == 'L2_Norm':
             normalized = l2_normalization(spectrum)
-        elif method == 'L1_Norm': 
+        elif method == 'L1_Norm':  
             normalized = l1_normalization(spectrum)
-        elif method == 'SNV':
+        elif method == 'SNV': 
             normalized = snv_normalization(spectrum)
         elif method == 'MinMax':
             normalized = minmax_normalization(spectrum)
@@ -863,11 +939,13 @@ def plot_normalization_comparison(
         
         marker_size = 200 if method == recommended else 100
         ax6.scatter(mean_val, std_val, s=marker_size, color=color, 
-                   label=label, alpha=0.7, edgecolor='black', linewidth=2 if method == recommended else 1)
+                   label=label, alpha=0.7, edgecolor='black', 
+                   linewidth=2 if method == recommended else 1)
     
     ax6.set_xlabel('Mean Intensity', fontsize=11)
     ax6.set_ylabel('Std Deviation', fontsize=11)
-    ax6.set_title('Mean vs Std Distribution', fontweight='bold', fontsize=12)
+    ax6.set_title('Mean vs Std Distribution\n(Normalized methods cluster)', 
+                  fontweight='bold', fontsize=12)
     ax6.legend(loc='best', fontsize=9)
     ax6.grid(True, alpha=0.3)
     
@@ -876,7 +954,7 @@ def plot_normalization_comparison(
     if save_path:
         path1 = save_path.replace('.png', '_spectral.png')
         fig1.savefig(path1, dpi=150, bbox_inches='tight')
-        print(f"\n✓ Figure 1 saved to:  {path1}")
+        print(f"\n✓ Figure 1 saved to:   {path1}")
     
     plt.show()
     
@@ -884,14 +962,25 @@ def plot_normalization_comparison(
     # FIGURE 2: PERFORMANCE METRICS
     # ========================================================================
     fig2 = plt.figure(figsize=(18, 10))
-    fig2.suptitle('LIBS Normalization - Performance Metrics\nL2-Norm [237]: Bias=0.000, RMSE=0.002 (Best) | SNV:  RMSE=0.220 (Worst)',
+    fig2.suptitle('LIBS Normalization - Performance Metrics\nL2-Norm [237]:  Bias=0.000, RMSE=0.002 (Best) | SNV:   RMSE=0.220 (Worst)',
                   fontsize=14, fontweight='bold', y=0.995)
     
     methods = list(results.keys())
     
+    # Extract all metrics from results dictionary (FIX for undefined variables)
+    bias_all = np.array([results[m].bias for m in methods])
+    rmse_all = np.array([results[m].rmse for m in methods])
+    peak_pres_all = np.array([results[m].peak_preservation for m in methods])
+    inter_var_all = np.array([results[m].inter_sample_variance for m in methods])
+    ratio_pres_all = np.array([results[m].peak_ratio_preservation for m in methods])
+    classification_all = np.array([results[m].classification_accuracy for m in methods])
+    
+    # Check if classification is available
+    has_classification = np.any(classification_all > 0)
+    
     # Plot 1: RMSE comparison
     ax1 = fig2.add_subplot(2, 3, 1)
-    rmse_vals = [results[m].rmse for m in methods]
+    rmse_vals = rmse_all.tolist()
     colors_bar = ['green' if m == recommended else ('red' if m == 'SNV' else 'blue') for m in methods]
     
     bars = ax1.barh(methods, rmse_vals, color=colors_bar, alpha=0.7, edgecolor='black')
@@ -901,7 +990,7 @@ def plot_normalization_comparison(
             bar.set_linewidth(3)
     
     ax1.set_xlabel('RMSE vs L2 Gold Standard (lower=better)', fontsize=11)
-    ax1.set_title('RMSE Comparison\n[237]:  L2=0.002, SNV=0.220', fontweight='bold', fontsize=12)
+    ax1.set_title('RMSE Comparison\n[237]:   L2=0.002, SNV=0.220', fontweight='bold', fontsize=12)
     ax1.axvline(x=0.002, color='green', linestyle='--', linewidth=2, label='Literature L2')
     ax1.axvline(x=0.220, color='red', linestyle='--', linewidth=2, label='Literature SNV')
     ax1.legend(fontsize=9)
@@ -909,7 +998,7 @@ def plot_normalization_comparison(
     
     # Plot 2: Bias comparison
     ax2 = fig2.add_subplot(2, 3, 2)
-    bias_vals = [results[m].bias for m in methods]
+    bias_vals = bias_all.tolist()
     
     bars = ax2.barh(methods, bias_vals, color=colors_bar, alpha=0.7, edgecolor='black')
     for bar, method in zip(bars, methods):
@@ -925,10 +1014,10 @@ def plot_normalization_comparison(
     
     # Plot 3: Peak ratio preservation (CRITICAL)
     ax3 = fig2.add_subplot(2, 3, 3)
-    ratio_vals = [results[m].peak_ratio_preservation for m in methods]
+    ratio_vals = ratio_pres_all.tolist()
     colors_ratio = []
     for m, ratio in zip(methods, ratio_vals):
-        if m == recommended: 
+        if m == recommended:  
             colors_ratio.append('green')
         elif ratio < 0.9:
             colors_ratio.append('red')
@@ -951,7 +1040,7 @@ def plot_normalization_comparison(
     
     # Plot 4: Inter-sample variance
     ax4 = fig2.add_subplot(2, 3, 4)
-    var_vals = [results[m].inter_sample_variance for m in methods]
+    var_vals = inter_var_all.tolist()
     
     bars = ax4.barh(methods, var_vals, color=colors_bar, alpha=0.7, edgecolor='black')
     for bar, method in zip(bars, methods):
@@ -963,16 +1052,92 @@ def plot_normalization_comparison(
     ax4.set_title('Inter-sample Consistency', fontweight='bold', fontsize=12)
     ax4.grid(True, alpha=0.3, axis='x')
     
-    # Plot 5: Overall ranking
+    # Plot 5: Classification Accuracy OR Metric Comparison Table
     ax5 = fig2.add_subplot(2, 3, 5)
     
-    # Calculate scores (same as recommendation function)
-    bias_all = np.array([results[m].bias for m in methods])
-    rmse_all = np.array([results[m].rmse for m in methods])
-    peak_pres_all = np.array([results[m].peak_preservation for m in methods])
-    inter_var_all = np.array([results[m].inter_sample_variance for m in methods])
-    ratio_pres_all = np.array([results[m].peak_ratio_preservation for m in methods])
+    if has_classification:
+        # Show classification accuracy bar chart
+        cls_vals = classification_all.tolist()
+        
+        # Sort by classification accuracy
+        sorted_indices = np.argsort(cls_vals)[::-1]
+        sorted_methods_cls = [methods[i] for i in sorted_indices]
+        sorted_cls_vals = [cls_vals[i] for i in sorted_indices]
+        
+        colors_cls = []
+        for m, acc in zip(sorted_methods_cls, sorted_cls_vals):
+            if m == recommended:  
+                colors_cls.append('green')
+            elif acc < 80:
+                colors_cls.append('red')
+            else:
+                colors_cls.append('blue')
+        
+        bars = ax5.barh(sorted_methods_cls, sorted_cls_vals, color=colors_cls, alpha=0.7, edgecolor='black')
+        
+        for bar, method in zip(bars, sorted_methods_cls):
+            if method == recommended: 
+                bar.set_edgecolor('darkgreen')
+                bar.set_linewidth(3)
+        
+        ax5.set_xlabel('Classification Accuracy (%)', fontsize=11)
+        ax5.set_title('Classification Accuracy\n(Key Performance Metric)', fontweight='bold', fontsize=12)
+        ax5.axvline(x=85, color='orange', linestyle='--', linewidth=2, alpha=0.7, label='Target (85%)')
+        ax5.axvline(x=73.01, color='red', linestyle='--', linewidth=2, alpha=0.7, label='Baseline (73.01%)')
+        ax5.legend(fontsize=9, loc='lower right')
+        ax5.grid(True, alpha=0.3, axis='x')
+        
+        # Add accuracy annotations
+        for bar, acc in zip(bars, sorted_cls_vals):
+            width = bar.get_width()
+            ax5.text(width + 0.5, bar.get_y() + bar.get_height()/2,
+                    f'{acc:.2f}%', ha='left', va='center', fontsize=9, fontweight='bold')
+    else:
+        # Fallback:  Show detailed metric table
+        ax5.axis('tight')
+        ax5.axis('off')
+        
+        # Create table with top 5 methods sorted by RMSE
+        sorted_indices = np.argsort(rmse_all)
+        top_5_indices = sorted_indices[:5]
+        
+        table_data = [['Method', 'RMSE', 'Ratio Pres. ', 'Bias']]
+        cell_colors = [['lightgray'] * 4]
+        
+        for idx in top_5_indices: 
+            method = methods[idx]
+            m = results[method]
+            row = [
+                method,
+                f'{m.rmse:.4f}',
+                f'{m.peak_ratio_preservation:.3f}',
+                f'{m.bias:.4f}'
+            ]
+            table_data.append(row)
+            
+            if method == recommended:
+                cell_colors.append(['lightgreen'] * 4)
+            elif method == 'SNV':  
+                cell_colors.append(['lightcoral'] * 4)
+            else:
+                cell_colors.append(['white'] * 4)
+        
+        table = ax5.table(cellText=table_data, cellColours=cell_colors,
+                         cellLoc='center', loc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1, 2.5)
+        
+        for i in range(4):
+            table[(0, i)].set_text_props(weight='bold')
+        
+        ax5.set_title('Top 5 Methods - Actual Metrics\n(Shows performance differences)', 
+                     fontweight='bold', fontsize=12, pad=20)
     
+    # Plot 6: Radar chart (top 4 methods)
+    ax6 = fig2.add_subplot(2, 3, 6, projection='polar')
+    
+    # Calculate normalized scores for radar chart
     bias_scores = 100 * (1 - (bias_all - bias_all.min()) / (bias_all.max() - bias_all.min() + 1e-10))
     rmse_scores = 100 * (1 - (rmse_all - rmse_all.min()) / (rmse_all.max() - rmse_all.min() + 1e-10))
     peak_pres_scores = 100 * peak_pres_all
@@ -991,29 +1156,8 @@ def plot_normalization_comparison(
         scores[method] = score
     
     sorted_methods = sorted(scores, key=scores.get, reverse=True)
-    sorted_scores = [scores[m] for m in sorted_methods]
-    colors_rank = ['green' if m == recommended else 'blue' for m in sorted_methods]
-    
-    bars = ax5.barh(sorted_methods, sorted_scores, color=colors_rank, alpha=0.7, edgecolor='black')
-    for bar, method in zip(bars, sorted_methods):
-        if method == recommended: 
-            bar.set_edgecolor('darkgreen')
-            bar.set_linewidth(3)
-    
-    ax5.set_xlabel('Overall Score (0-100)', fontsize=11)
-    ax5.set_title(f'Overall Ranking\nRecommended: {recommended}', fontweight='bold', fontsize=12)
-    ax5.grid(True, alpha=0.3, axis='x')
-    
-    # Add score annotations
-    for bar, score in zip(bars, sorted_scores):
-        width = bar.get_width()
-        ax5.text(width + 1, bar.get_y() + bar.get_height()/2,
-                f'{score:.1f}', ha='left', va='center', fontsize=9, fontweight='bold')
-    
-    # Plot 6: Radar chart (top 4 methods)
-    ax6 = fig2.add_subplot(2, 3, 6, projection='polar')
-    
     top_4 = sorted_methods[:4]
+    
     categories = ['RMSE', 'Ratio Preservation', 'Peak Preservation', 'Low Bias', 'Consistency']
     N = len(categories)
     angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
@@ -1044,10 +1188,10 @@ def plot_normalization_comparison(
     
     plt.tight_layout(rect=[0, 0, 1, 0.99])
     
-    if save_path: 
+    if save_path:  
         path2 = save_path.replace('.png', '_metrics.png')
         fig2.savefig(path2, dpi=150, bbox_inches='tight')
-        print(f"✓ Figure 2 saved to: {path2}")
+        print(f"✓ Figure 2 saved to:  {path2}")
     
     plt.show()
 
@@ -1164,13 +1308,13 @@ def save_recommendation_report(
 # MAIN EXECUTION
 # ============================================================================
 
-if __name__ == "__main__":
+
+if __name__ == "__main__": 
     print("="*70)
     print("LIBS NORMALIZATION METHOD COMPARISON")
     print("Context Feeder [237]: L2 Bias=0.000, RMSE=0.002 | SNV RMSE=0.220")
     print("="*70)
     
-    # Configuration
     USE_REAL_DATA = True
     
     REAL_DATA_CONFIG = {
@@ -1180,22 +1324,17 @@ if __name__ == "__main__":
         "wavelength_range": (197.001, 973.5891),
     }
     
-    # Load data (reuse from filter/baseline comparison if available)
-    if USE_REAL_DATA:
-        try: 
-            import sys
-            sys.path.append(os.path.dirname(__file__))
-            from filter_comparison import load_real_data
+    # Load data
+    if USE_REAL_DATA: 
+        try:
+            from libs_preprocessing import load_irish_soil_data
             
-            spectra_raw, labels, wavelengths = load_real_data(
-                REAL_DATA_CONFIG["filepath"],
-                wavelengths_in_first_column=True,
-                sample_names_in_first_row=True,
-                wavelength_range=REAL_DATA_CONFIG["wavelength_range"]
+            spectra_raw, sample_names, wavelengths = load_irish_soil_data(
+                REAL_DATA_CONFIG["filepath"]
             )
             
-            # Apply baseline correction first (normalization comes AFTER preprocessing)
-            print("\nApplying Polynomial baseline correction first...")
+            # Apply baseline correction first
+            print("\nApplying Polynomial baseline correction (degree=5)...")
             spectra_baseline = apply_baseline_correction_batch(
                 spectra_raw, degree=5, verbose=True
             )
@@ -1206,60 +1345,85 @@ if __name__ == "__main__":
             USE_REAL_DATA = False
     
     if not USE_REAL_DATA: 
-        # Generate synthetic LIBS data
-        print("\nGenerating synthetic LIBS data...")
+        print("\nGenerating synthetic data...")
         np.random.seed(42)
-        n_samples = 324
-        n_features = 12981
+        n_samples, n_features = 324, 12981
         wavelengths = np.linspace(197.001, 973.5891, n_features)
+        sample_names = np.array([f"Sample_{i+1}" for i in range(n_samples)])
         
         spectra_baseline = np.zeros((n_samples, n_features))
         for i in range(n_samples):
-            # Baseline (already corrected, so flat)
             baseline_level = 100
-            
-            # Peaks at N, P, K wavelengths
-            peak_positions = [253.5, 255.3, 742.4, 744.2, 746.8, 766.5, 769.9]
+            peak_positions = [253.5, 255.3, 742.4, 766.5]
             for pos in peak_positions:
                 intensity = np.random.uniform(500, 2000)
                 peak = intensity * np.exp(-0.5 * ((wavelengths - pos) / 0.5)**2)
                 spectra_baseline[i] += peak
-            
             spectra_baseline[i] += baseline_level
             spectra_baseline[i] += np.random.normal(0, 20, n_features)
+    
+    # Run comparison for BOTH objectives (if classification enabled)
+    if ENABLE_CLASSIFICATION and sample_names is not None:
+        print("\n" + "="*70)
+        print("COMPARISON 1: NUTRIENT CLASSIFICATION")
+        print("="*70)
+        results_nutrient = compare_normalization_methods(
+            spectra_baseline, wavelengths, sample_names,
+            objective='nutrient', verbose=True
+        )
         
-        print(f"Generated:  {spectra_baseline.shape}")
-    
-    # Run comparison
-    results = compare_normalization_methods(spectra_baseline, wavelengths, verbose=True)
-    
-    # Display results
-    print_results_table(results)
-    
-    # Generate recommendation
-    recommended, justification = generate_recommendation(results)
-    
-    print("\n" + "="*70)
-    print("RECOMMENDATION")
-    print("="*70)
-    print(justification)
-    
-    # Save report
-    save_recommendation_report(results, recommended, justification)
-    
-    # Visualize
-    plot_normalization_comparison(
-        spectra_baseline[0],
-        wavelengths,
-        results,
-        recommended,
-        save_path='normalization_comparison.png'
-    )
+        print("\n" + "="*70)
+        print("COMPARISON 2: CONTAMINANT DETECTION")
+        print("="*70)
+        results_contaminant = compare_normalization_methods(
+            spectra_baseline, wavelengths, sample_names,
+            objective='contaminant', verbose=True
+        )
+        
+        # Generate recommendations for BOTH
+        print("\n" + "="*70)
+        print("NUTRIENT CLASSIFICATION RECOMMENDATION")
+        print("="*70)
+        recommended_nut, justification_nut = generate_recommendation(results_nutrient)
+        print(justification_nut)
+        
+        print("\n" + "="*70)
+        print("CONTAMINANT DETECTION RECOMMENDATION")
+        print("="*70)
+        recommended_con, justification_con = generate_recommendation(results_contaminant)
+        print(justification_con)
+        
+        # Save both reports
+        save_recommendation_report(results_nutrient, recommended_nut, justification_nut,
+                                  'normalization_recommendation_nutrient.txt')
+        save_recommendation_report(results_contaminant, recommended_con, justification_con,
+                                  'normalization_recommendation_contaminant.txt')
+        
+        # Visualize nutrient results
+        plot_normalization_comparison(spectra_baseline[0], wavelengths, results_nutrient,
+                                     recommended_nut, save_path='normalization_comparison_nutrient.png')
+        
+    else:
+        # Fallback:  spectral quality only
+        print("\n⚠️ Running spectral quality comparison only")
+        results = compare_normalization_methods(spectra_baseline, wavelengths, verbose=True)
+        
+        print_results_table(results)
+        recommended, justification = generate_recommendation(results)
+        
+        print("\n" + "="*70)
+        print("RECOMMENDATION")
+        print("="*70)
+        print(justification)
+        
+        save_recommendation_report(results, recommended, justification)
+        plot_normalization_comparison(spectra_baseline[0], wavelengths, results, recommended,
+                                     save_path='normalization_comparison.png')
     
     print("\n" + "="*70)
     print("NEXT STEPS")
     print("="*70)
-    print("1. Review 'normalization_recommendation.txt' for detailed justification")
-    print("2. Update 'libs_preprocessing.py' with recommended normalization method")
-    print("3. Proceed with feature selection on normalized spectra")
-    print("="*70)
+    print("1. Review recommendation reports")
+    print("2. Update libs_preprocessing.py with optimal normalization method")
+    print("3. Proceed to Phase 2: Feature Selection")
+    print("="*70)  

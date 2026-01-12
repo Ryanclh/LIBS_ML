@@ -1,0 +1,3 @@
+# Ignore all generated PNG and TXT files in this project and subfolders
+*.png
+*.txt

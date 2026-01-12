@@ -25,7 +25,17 @@ import warnings
 import time
 from dataclasses import dataclass
 import os
+import sys
+sys.path.append(os.path.dirname(__file__))
 
+# Try to import label generation functions
+try:
+    from generate_labels import get_nutrient_label, get_contaminant_label
+    ENABLE_CLASSIFICATION = True
+except ImportError: 
+    print("⚠️ Warning: Could not import label generation functions from generate_labels.py")
+    print("   Classification evaluation will be disabled.")
+    ENABLE_CLASSIFICATION = False
 warnings.filterwarnings('ignore')
 
 
@@ -484,7 +494,8 @@ class BaselineMetrics:
     edge_stability_left: float        # std of first 50 points (lower=better)
     edge_stability_right: float       # std of last 50 points (lower=better)
     edge_stability_ratio: float       # edge_std / center_std (lower=better)
-    peak_recovery_rate: float         # NEW: % recovery of synthetic peak (higher=better, 100%=ideal)
+    peak_recovery_rate: float         # % recovery of synthetic peak (higher=better, 100%=ideal)
+    classification_accuracy: float    # NEW: Classification accuracy with RF classifier (higher=better)
 
 
 def calculate_baseline_flatness(corrected:  np.ndarray, 
@@ -557,29 +568,65 @@ def calculate_residual_quality(spectrum: np.ndarray, baseline: np.ndarray) -> fl
 def compare_baseline_methods(
     spectra: np.ndarray,
     wavelengths: np.ndarray,
+    sample_names: np.ndarray = None,  # NEW: Optional for classification
+    objective: str = 'nutrient',      # NEW:  'nutrient' or 'contaminant'
     verbose: bool = True
 ) -> Dict[str, BaselineMetrics]:
     """
-    Comprehensive comparison of baseline correction methods.
+    Comprehensive comparison INCLUDING optional classification evaluation.
     
-    Includes SYNTHETIC GROUND TRUTH test to validate quantitative accuracy.
+    All existing metrics preserved: 
+    - Baseline flatness
+    - Peak preservation
+    - Edge stability (polynomial oscillation test)
+    - Peak recovery (synthetic ground truth test)
+    - NEW: Classification accuracy (if sample_names provided)
     
     Parameters
     ----------
-    spectra :  np.ndarray
+    spectra : np.ndarray
         Raw spectra (n_samples, n_features)
     wavelengths : np.ndarray
         Wavelength values
+    sample_names : np.ndarray, optional
+        Sample identifiers for label generation (enables classification)
+    objective : str
+        'nutrient' (NPK High/Med/Low) or 'contaminant' (Clean/Contaminated)
     verbose : bool
         Print progress
         
     Returns
     -------
     results : Dict[str, BaselineMetrics]
-        Metrics for each method
+        All metrics INCLUDING classification_accuracy
     """
     
-    # Method configurations (same as before)
+    # NEW: Generate labels if sample names provided
+    y_encoded = None
+    if sample_names is not None and ENABLE_CLASSIFICATION:
+        if objective == 'nutrient':
+            labels_raw = np.array([get_nutrient_label(name) for name in sample_names])
+            valid_mask = labels_raw != -1
+            spectra = spectra[valid_mask]
+            labels = labels_raw[valid_mask]
+            print(f"\n✓ Classification enabled:  Nutrient classification (High/Med/Low)")
+            print(f"  Usable samples: {len(labels)} (excluded {np.sum(~valid_mask)} contaminated)")
+        elif objective == 'contaminant': 
+            labels = np.array([get_contaminant_label(name) for name in sample_names])
+            print(f"\n✓ Classification enabled: Contaminant detection (Clean/Contaminated)")
+            print(f"  Total samples: {len(labels)}")
+        else:
+            raise ValueError(f"Unknown objective: {objective}")
+        
+        from sklearn.preprocessing import LabelEncoder
+        le = LabelEncoder()
+        y_encoded = le.fit_transform(labels)
+    else:
+        if verbose and sample_names is None:
+            print("\n⚠️ Sample names not provided - classification disabled")
+            print("   All other metrics will be calculated\n")
+    
+    # Method configurations (UNCHANGED - all existing methods preserved)
     methods = {
         'AsLS_default': {
             'func': lambda x: asls_baseline(x, lam=1e6, p=0.01),
@@ -596,8 +643,8 @@ def compare_baseline_methods(
             'params': 2,
             'description': 'AsLS (lam=1e6, p=0.001) - More asymmetric'
         },
-        'airPLS': {
-            'func':  lambda x: airpls_baseline(x, lam=1e6),
+        'airPLS':  {
+            'func': lambda x: airpls_baseline(x, lam=1e6),
             'params': 1,
             'description': 'airPLS (lam=1e6) - Adaptive'
         },
@@ -627,11 +674,11 @@ def compare_baseline_methods(
             'description': 'Morphological opening (window=50)'
         },
         'RollingBall': {
-            'func': lambda x: rolling_ball_baseline(x, radius=50),
+            'func':  lambda x: rolling_ball_baseline(x, radius=50),
             'params': 1,
             'description': 'Rolling ball (radius=50)'
         },
-        'Median': {
+        'Median':  {
             'func': lambda x: median_baseline(x, window=101),
             'params': 1,
             'description': 'Median filter (window=101) - Robust'
@@ -643,23 +690,23 @@ def compare_baseline_methods(
     
     if verbose:
         print("\n" + "="*70)
-        print("BASELINE CORRECTION METHOD COMPARISON")
-        print("Justification: AsLS r=0.93, 19% RMSE improvement [221]")
+        mode = "WITH CLASSIFICATION" if y_encoded is not None else "SPECTRAL QUALITY ONLY"
+        print(f"BASELINE CORRECTION METHOD COMPARISON ({mode})")
+        print("All metrics:  Flatness, Peak Preservation, Edge Stability,")
+        print("             Peak Recovery, Computation Time" + (" + Classification" if y_encoded is not None else ""))
         print("="*70)
-        print(f"\nTesting on {n_samples} spectra...")
-        print("Edge Effect Test: First/last 50 points (200nm, 950nm regions)")
-        print("Synthetic Ground Truth: Peak recovery validation\n")
+        print(f"Testing on {n_samples} spectra...")
     
-    # Select a representative spectrum for synthetic testing
+    # Select representative spectrum for synthetic testing
     test_spectrum_idx = n_samples // 2
     base_spectrum_template = spectra[test_spectrum_idx]
     
     for name, config in methods.items():
         if verbose:
-            print(f"Evaluating:  {name}...")
+            print(f"\nEvaluating:  {name}...")
             print(f"  {config['description']}")
         
-        # Metrics accumulators
+        # Metrics accumulators (ALL EXISTING METRICS PRESERVED)
         flatness_scores = []
         preservation_scores = []
         residual_scores = []
@@ -675,7 +722,6 @@ def compare_baseline_methods(
         for i in range(test_samples):
             original = spectra[i]
             
-            # Time the baseline correction
             start_time = time.time()
             try:
                 baseline = config['func'](original)
@@ -688,7 +734,7 @@ def compare_baseline_methods(
             
             corrected = np.maximum(original - baseline, 0)
             
-            # Calculate metrics
+            # Calculate all existing metrics
             flatness_scores.append(calculate_baseline_flatness(corrected))
             preservation_scores.append(calculate_peak_preservation(original, corrected))
             residual_scores.append(calculate_residual_quality(original, baseline))
@@ -701,7 +747,7 @@ def compare_baseline_methods(
             edge_right_scores.append(right_std)
             edge_ratio_scores.append(ratio)
         
-        # NEW:  Synthetic Ground Truth Test
+        # Synthetic Ground Truth Test (PRESERVED)
         if verbose:
             print(f"  Running synthetic peak recovery test...")
         
@@ -712,35 +758,65 @@ def compare_baseline_methods(
             n_tests=5
         )
         
-        # Store results
+        # NEW: Classification accuracy evaluation (if labels available)
+        classification_accuracy = 0.0
+        if y_encoded is not None:
+            # Apply baseline correction to all spectra
+            corrected_all = np.zeros_like(spectra)
+            for i in range(len(spectra)):
+                try:
+                    baseline = config['func'](spectra[i])
+                    corrected_all[i] = np.maximum(spectra[i] - baseline, 0)
+                except: 
+                    corrected_all[i] = spectra[i]
+            
+            # Normalize for classification
+            from sklearn.preprocessing import normalize
+            corrected_norm = normalize(corrected_all, norm='l2', axis=1)
+            
+            # Random Forest classifier (Context Feeder [302]:  94.9%, 128KB)
+            from sklearn.ensemble import RandomForestClassifier
+            from sklearn.model_selection import StratifiedKFold, cross_val_score
+            
+            rf = RandomForestClassifier(
+                n_estimators=100,
+                max_depth=8,
+                random_state=42,
+                n_jobs=-1
+            )
+            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+            cv_scores = cross_val_score(rf, corrected_norm, y_encoded, cv=cv, scoring='accuracy')
+            classification_accuracy = np.mean(cv_scores) * 100
+        
+        # Store results (ALL METRICS)
         results[name] = BaselineMetrics(
             name=name,
             baseline_flatness=np.mean(flatness_scores),
             peak_preservation=np.mean(preservation_scores),
             residual_std=np.mean(residual_scores),
             peak_distortion=np.mean(distortion_scores),
-            computation_time_ms=np.mean(times),
+            computation_time_ms=np. mean(times),
             parameter_complexity=config['params'],
-            edge_stability_left=np.mean(edge_left_scores),
+            edge_stability_left=np. mean(edge_left_scores),
             edge_stability_right=np.mean(edge_right_scores),
             edge_stability_ratio=np.mean(edge_ratio_scores),
-            peak_recovery_rate=mean_recovery
+            peak_recovery_rate=mean_recovery,
+            classification_accuracy=classification_accuracy  # NEW
         )
         
         if verbose:
             m = results[name]
             print(f"  Baseline Flatness:     {m.baseline_flatness:.4f} (lower=better)")
-            print(f"  Peak Preservation:  {m.peak_preservation:.4f} (higher=better)")
-            print(f"  Peak Distortion:    {m.peak_distortion:.2f}% (lower=better)")
-            print(f"  Edge Stability:      L={m.edge_stability_left:.4f}, R={m. edge_stability_right:.4f}, Ratio={m.edge_stability_ratio:.2f}")
+            print(f"  Peak Preservation:    {m.peak_preservation:.4f} (higher=better)")
+            print(f"  Edge Stability:       L={m.edge_stability_left:.4f}, R={m. edge_stability_right:.4f}, Ratio={m.edge_stability_ratio:.2f}")
             if m.edge_stability_ratio > 2.0:
-                print(f"  ⚠️ WARNING: High edge instability (ratio > 2.0)")
-            print(f"  Peak Recovery:       {m.peak_recovery_rate:.2f}% (±{std_recovery:.2f}%) - 100% = ideal")
-            if m.peak_recovery_rate < 95.0:
-                print(f"  ⚠️ WARNING: Peak height distortion >5% - quantitative accuracy compromised")
-            elif m.peak_recovery_rate > 105.0:
-                print(f"  ⚠️ WARNING: Peak over-estimation >5% - baseline under-corrected")
-            print(f"  Computation Time:   {m.computation_time_ms:.3f} ms")
+                print(f"  ⚠️ WARNING: High edge instability")
+            print(f"  Peak Recovery:        {m. peak_recovery_rate:.2f}% (±{std_recovery:.2f}%)")
+            if m.peak_recovery_rate < 95.0 or m.peak_recovery_rate > 105.0:
+                print(f"  ⚠️ WARNING: Peak height deviation")
+            if y_encoded is not None:
+                print(f"  Classification:        {m.classification_accuracy:.2f}% ✓")
+            print(f"  Computation Time:     {m.computation_time_ms:.3f} ms")
             print()
     
     return results
@@ -1315,16 +1391,16 @@ def plot_baseline_comparison(
     plt.show()
     
     # ========================================================================
-    # FIGURE 2: PERFORMANCE METRICS (5 plots in 2x3 layout)
+    # FIGURE 2: PERFORMANCE METRICS (7 plots in 3x3 layout, bottom-center empty)
     # ========================================================================
-    fig2 = plt.figure(figsize=(18, 10))
-    fig2.suptitle('LIBS Baseline Correction - Performance Metrics\nEdge Stability Test:  Ratio <2.0 = Excellent, >2.5 = Problematic',
+    fig2 = plt.figure(figsize=(20, 14))
+    fig2.suptitle('LIBS Baseline Correction - Performance Metrics\nEdge Stability Test: Ratio <2.0 = Excellent, >2.5 = Problematic | Peak Recovery: 95-105% = Accurate',
                   fontsize=14, fontweight='bold', y=0.995)
     
     methods = list(results.keys())
     
     # Plot 1: Baseline flatness bar chart
-    ax1 = fig2.add_subplot(2, 3, 1)
+    ax1 = fig2.add_subplot(3, 3, 1)
     flatness_vals = [results[m].baseline_flatness for m in methods]
     colors_bar = ['green' if m == recommended else 'blue' for m in methods]
     
@@ -1338,9 +1414,13 @@ def plot_baseline_comparison(
     ax1.set_title('Baseline Flatness Comparison', fontweight='bold', fontsize=12)
     ax1.grid(True, alpha=0.3, axis='x')
     
+    # Adjust y-axis labels if too many methods
+    if len(methods) > 10:
+        ax1.tick_params(axis='y', labelsize=8)
+    
     # Plot 2: Peak preservation bar chart
-    ax2 = fig2.add_subplot(2, 3, 2)
-    preservation_vals = [results[m]. peak_preservation for m in methods]
+    ax2 = fig2.add_subplot(3, 3, 2)
+    preservation_vals = [results[m].peak_preservation for m in methods]
     
     bars = ax2.barh(methods, preservation_vals, color=colors_bar, alpha=0.7, edgecolor='black')
     for bar, method in zip(bars, methods):
@@ -1354,8 +1434,11 @@ def plot_baseline_comparison(
     ax2.grid(True, alpha=0.3, axis='x')
     ax2.legend(fontsize=9)
     
+    if len(methods) > 10:
+        ax2.tick_params(axis='y', labelsize=8)
+    
     # Plot 3: Edge stability ratio (CRITICAL)
-    ax3 = fig2.add_subplot(2, 3, 3)
+    ax3 = fig2.add_subplot(3, 3, 3)
     edge_ratios = [results[m].edge_stability_ratio for m in methods]
     colors_edge = []
     for m, ratio in zip(methods, edge_ratios):
@@ -1381,22 +1464,11 @@ def plot_baseline_comparison(
     ax3.legend(fontsize=9)
     ax3.grid(True, alpha=0.3, axis='x')
     
-    # Plot 4: Computation time
-    ax4 = fig2.add_subplot(2, 3, 4)
-    time_vals = [results[m]. computation_time_ms for m in methods]
+    if len(methods) > 10:
+        ax3.tick_params(axis='y', labelsize=8)
     
-    bars = ax4.barh(methods, time_vals, color=colors_bar, alpha=0.7, edgecolor='black')
-    for bar, method in zip(bars, methods):
-        if method == recommended:
-            bar.set_edgecolor('darkgreen')
-            bar.set_linewidth(3)
-    
-    ax4.set_xlabel('Computation Time (ms, lower=better)', fontsize=11)
-    ax4.set_title('Computational Cost', fontweight='bold', fontsize=12)
-    ax4.grid(True, alpha=0.3, axis='x')
-    
-    # Plot 4a: Peak Recovery Rate (Synthetic Ground Truth Validation)
-    ax4 = fig2.add_subplot(2, 3, 4)
+    # Plot 4: Peak Recovery Rate (Synthetic Ground Truth Validation)
+    ax4 = fig2.add_subplot(3, 3, 4)
     recovery_vals = [results[m].peak_recovery_rate for m in methods]
     colors_recovery = []
     for m, recovery in zip(methods, recovery_vals):
@@ -1410,7 +1482,7 @@ def plot_baseline_comparison(
     bars = ax4.barh(methods, recovery_vals, color=colors_recovery, alpha=0.7, edgecolor='black')
     for bar, method in zip(bars, methods):
         if method == recommended:
-            bar. set_edgecolor('darkgreen')
+            bar.set_edgecolor('darkgreen')
             bar.set_linewidth(3)
     
     ax4.set_xlabel('Peak Recovery Rate (%, 100% = ideal)', fontsize=11)
@@ -1420,61 +1492,193 @@ def plot_baseline_comparison(
     ax4.axvline(x=105, color='orange', linestyle='--', linewidth=2, alpha=0.7, label='105% threshold')
     ax4.legend(fontsize=9, loc='lower right')
     ax4.grid(True, alpha=0.3, axis='x')
-    ax4.set_xlim(85, 115)
     
-    # Add percentage annotations
+    # Dynamic x-axis limits based on data range
+    min_recovery = min(recovery_vals)
+    max_recovery = max(recovery_vals)
+    x_margin = (max_recovery - min_recovery) * 0.15  # 15% margin
+    ax4.set_xlim(max(80, min_recovery - x_margin), min(120, max_recovery + x_margin))
+    
+    # Add percentage annotations with smart positioning
     for bar, recovery in zip(bars, recovery_vals):
         width = bar.get_width()
-        ax4.text(width + 0.5, bar.get_y() + bar.get_height()/2,
-                f'{recovery:.1f}%', ha='left', va='center', fontsize=8, fontweight='bold')
-
-    # Plot 5: Overall ranking (weighted score)
-    ax5 = fig2.add_subplot(2, 3, 5)
+        bar_center = bar.get_y() + bar.get_height() / 2
+        
+        # Check if annotation fits inside bar
+        x_range = ax4.get_xlim()[1] - ax4.get_xlim()[0]
+        bar_width_percent = (width - ax4.get_xlim()[0]) / x_range
+        
+        if bar_width_percent > 0.15:  # If bar is >15% of plot width, put text inside
+            text_x = width - (x_range * 0.02)  # 2% margin from right edge
+            text_ha = 'right'
+            text_color = 'white'
+        else:  # Otherwise put text outside
+            text_x = width + (x_range * 0.01)  # 1% margin from bar end
+            text_ha = 'left'
+            text_color = 'black'
+        
+        ax4.text(text_x, bar_center, f'{recovery:.1f}%',
+                ha=text_ha, va='center', fontsize=8, fontweight='bold', color=text_color)
+    
+    if len(methods) > 10:
+        ax4.tick_params(axis='y', labelsize=8)
+    
+    # Plot 5: Computation Time
+    ax5 = fig2.add_subplot(3, 3, 5)
+    time_vals = [results[m].computation_time_ms for m in methods]
+    
+    bars = ax5.barh(methods, time_vals, color=colors_bar, alpha=0.7, edgecolor='black')
+    for bar, method in zip(bars, methods):
+        if method == recommended:
+            bar.set_edgecolor('darkgreen')
+            bar.set_linewidth(3)
+    
+    ax5.set_xlabel('Computation Time (ms, lower=better)', fontsize=11)
+    ax5.set_title('Computational Cost', fontweight='bold', fontsize=12)
+    ax5.grid(True, alpha=0.3, axis='x')
+    
+    # Dynamic x-axis for computation time
+    min_time = min(time_vals)
+    max_time = max(time_vals)
+    time_margin = (max_time - min_time) * 0.15
+    ax5.set_xlim(0, max_time + time_margin)
+    
+    # Add time annotations with smart positioning
+    for bar, time_val in zip(bars, time_vals):
+        width = bar.get_width()
+        bar_center = bar.get_y() + bar.get_height() / 2
+        
+        x_range = ax5.get_xlim()[1] - ax5.get_xlim()[0]
+        bar_width_percent = width / x_range
+        
+        if bar_width_percent > 0.15:
+            text_x = width - (x_range * 0.02)
+            text_ha = 'right'
+            text_color = 'white'
+        else:
+            text_x = width + (x_range * 0.01)
+            text_ha = 'left'
+            text_color = 'black'
+        
+        ax5.text(text_x, bar_center, f'{time_val:.2f}',
+                ha=text_ha, va='center', fontsize=8, fontweight='bold', color=text_color)
+    
+    if len(methods) > 10:
+        ax5.tick_params(axis='y', labelsize=8)
+    
+    # Plot 6: Peak Distortion
+    ax6 = fig2.add_subplot(3, 3, 6)
+    distortion_vals = [results[m].peak_distortion for m in methods]
+    
+    bars = ax6.barh(methods, distortion_vals, color=colors_bar, alpha=0.7, edgecolor='black')
+    for bar, method in zip(bars, methods):
+        if method == recommended:
+            bar.set_edgecolor('darkgreen')
+            bar.set_linewidth(3)
+    
+    ax6.set_xlabel('Peak Distortion (%, lower=better)', fontsize=11)
+    ax6.set_title('Peak Height Distortion', fontweight='bold', fontsize=12)
+    ax6.grid(True, alpha=0.3, axis='x')
+    
+    # Dynamic x-axis
+    min_dist = min(distortion_vals)
+    max_dist = max(distortion_vals)
+    dist_margin = (max_dist - min_dist) * 0.15
+    ax6.set_xlim(0, max_dist + dist_margin)
+    
+    # Add annotations
+    for bar, dist in zip(bars, distortion_vals):
+        width = bar.get_width()
+        bar_center = bar.get_y() + bar.get_height() / 2
+        
+        x_range = ax6.get_xlim()[1] - ax6.get_xlim()[0]
+        bar_width_percent = width / x_range
+        
+        if bar_width_percent > 0.15:
+            text_x = width - (x_range * 0.02)
+            text_ha = 'right'
+            text_color = 'white'
+        else:
+            text_x = width + (x_range * 0.01)
+            text_ha = 'left'
+            text_color = 'black'
+        
+        ax6.text(text_x, bar_center, f'{dist:.2f}%',
+                ha=text_ha, va='center', fontsize=8, fontweight='bold', color=text_color)
+    
+    if len(methods) > 10:
+        ax6.tick_params(axis='y', labelsize=8)
+    
+    # Plot 7: Overall ranking (weighted score)
+    ax7 = fig2.add_subplot(3, 3, 7)
     
     # Calculate scores
     flatness_all = np.array([results[m].baseline_flatness for m in methods])
-    preservation_all = np. array([results[m].peak_preservation for m in methods])
+    preservation_all = np.array([results[m].peak_preservation for m in methods])
     distortion_all = np.array([results[m].peak_distortion for m in methods])
     time_all = np.array([results[m].computation_time_ms for m in methods])
     edge_ratio_all = np.array([results[m].edge_stability_ratio for m in methods])
+    recovery_all = np.array([results[m].peak_recovery_rate for m in methods])
     
     scores = {}
     for i, method in enumerate(methods):
-        flatness_score = 100 * (1 - (flatness_all[i] - flatness_all. min()) / (flatness_all.max() - flatness_all.min() + 1e-10))
+        flatness_score = 100 * (1 - (flatness_all[i] - flatness_all.min()) / (flatness_all.max() - flatness_all.min() + 1e-10))
         preservation_score = 100 * preservation_all[i]
         distortion_score = 100 * (1 - (distortion_all[i] - distortion_all.min()) / (distortion_all.max() - distortion_all.min() + 1e-10))
         time_score = 100 * (1 - (time_all[i] - time_all.min()) / (time_all.max() - time_all.min() + 1e-10))
         edge_score = 100 * (1 - np.clip((edge_ratio_all[i] - 1.0) / 3.0, 0, 1))
+        recovery_score = 100 * (1 - np.abs(recovery_all[i] - 100.0) / 100.0)
         
-        scores[method] = (flatness_score * 0.25 + preservation_score * 0.35 +
-                         distortion_score * 0.15 + edge_score * 0.15 + time_score * 0.10)
+        scores[method] = (
+            flatness_score * 0.20 +
+            preservation_score * 0.30 +
+            distortion_score * 0.05 +
+            edge_score * 0.15 +
+            recovery_score * 0.25 +
+            time_score * 0.05
+        )
     
     sorted_methods = sorted(scores, key=scores.get, reverse=True)
     sorted_scores = [scores[m] for m in sorted_methods]
     colors_rank = ['green' if m == recommended else 'blue' for m in sorted_methods]
     
-    bars = ax5.barh(sorted_methods, sorted_scores, color=colors_rank, alpha=0.7, edgecolor='black')
+    bars = ax7.barh(sorted_methods, sorted_scores, color=colors_rank, alpha=0.7, edgecolor='black')
     for bar, method in zip(bars, sorted_methods):
-        if method == recommended: 
+        if method == recommended:
             bar.set_edgecolor('darkgreen')
             bar.set_linewidth(3)
     
-    ax5.set_xlabel('Overall Score (0-100)', fontsize=11)
-    ax5.set_title(f'Overall Ranking\nRecommended: {recommended}', fontweight='bold', fontsize=12)
-    ax5.grid(True, alpha=0.3, axis='x')
+    ax7.set_xlabel('Overall Score (0-100)', fontsize=11)
+    ax7.set_title(f'Overall Ranking\nRecommended: {recommended}', fontweight='bold', fontsize=12)
+    ax7.grid(True, alpha=0.3, axis='x')
+    ax7.set_xlim(0, 105)
     
-    # Add score annotations
+    # Add score annotations with smart positioning
     for bar, score in zip(bars, sorted_scores):
         width = bar.get_width()
-        ax5.text(width + 1, bar.get_y() + bar.get_height()/2,
-                f'{score:.1f}', ha='left', va='center', fontsize=9, fontweight='bold')
+        bar_center = bar.get_y() + bar.get_height() / 2
+        
+        if width > 15:  # If score > 15, put inside
+            text_x = width - 2
+            text_ha = 'right'
+            text_color = 'white'
+        else:
+            text_x = width + 1
+            text_ha = 'left'
+            text_color = 'black'
+        
+        ax7.text(text_x, bar_center, f'{score:.1f}',
+                ha=text_ha, va='center', fontsize=9, fontweight='bold', color=text_color)
     
-    # Plot 6: Multi-metric radar (top 5 methods)
-    ax6 = fig2.add_subplot(2, 3, 6, projection='polar')
+    if len(sorted_methods) > 10:
+        ax7.tick_params(axis='y', labelsize=8)
+    
+    # Plot 8: Multi-metric radar (top 5 methods) - BOTTOM CENTER (position 3,3,8)
+    ax8 = fig2.add_subplot(3, 3, 8, projection='polar')
     
     top_5 = sorted_methods[:5]
     
-    categories = ['Flatness', 'Preservation', 'Low Distortion', 'Edge Stability', 'Speed']
+    categories = ['Flatness', 'Preservation', 'Low Distortion', 'Edge Stability', 'Recovery', 'Speed']
     N = len(categories)
     angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
     angles += angles[:1]
@@ -1486,25 +1690,28 @@ def plot_baseline_comparison(
             100 * preservation_all[i],
             100 * (1 - (distortion_all[i] - distortion_all.min()) / (distortion_all.max() - distortion_all.min() + 1e-10)),
             100 * (1 - np.clip((edge_ratio_all[i] - 1.0) / 3.0, 0, 1)),
+            100 * (1 - np.abs(recovery_all[i] - 100.0) / 100.0),
             100 * (1 - (time_all[i] - time_all.min()) / (time_all.max() - time_all.min() + 1e-10))
         ]
         values += values[:1]
         
         linewidth = 3 if method == recommended else 2
         alpha_val = 0.9 if method == recommended else 0.6
-        ax6.plot(angles, values, 'o-', linewidth=linewidth, label=method, alpha=alpha_val)
-        ax6.fill(angles, values, alpha=0.15)
+        ax8.plot(angles, values, 'o-', linewidth=linewidth, label=method, alpha=alpha_val)
+        ax8.fill(angles, values, alpha=0.15)
     
-    ax6.set_xticks(angles[:-1])
-    ax6.set_xticklabels(categories, fontsize=10)
-    ax6.set_ylim(0, 100)
-    ax6.set_title('Top 5 Methods\n(Normalized Metrics)', fontweight='bold', fontsize=12, pad=20)
-    ax6.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1), fontsize=9)
-    ax6.grid(True)
+    ax8.set_xticks(angles[:-1])
+    ax8.set_xticklabels(categories, fontsize=10)
+    ax8.set_ylim(0, 100)
+    ax8.set_title('Top 5 Methods\n(Normalized Metrics)', fontweight='bold', fontsize=12, pad=20)
+    ax8.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1), fontsize=9)
+    ax8.grid(True)
+    
+    # Plot 9 position (3,3,9) remains empty for better spacing
     
     plt.tight_layout(rect=[0, 0, 1, 0.99])
     
-    if save_path: 
+    if save_path:
         path2 = save_path.replace('.png', '_metrics.png')
         fig2.savefig(path2, dpi=150, bbox_inches='tight')
         print(f"✓ Figure 2 saved to: {path2}")
@@ -1670,13 +1877,12 @@ def save_recommendation_report(
 # MAIN EXECUTION
 # ============================================================================
 
-if __name__ == "__main__":
+if __name__ == "__main__": 
     print("="*70)
     print("LIBS BASELINE CORRECTION METHOD COMPARISON")
     print("Context Feeder [221]: AsLS r=0.93, 19% RMSE improvement")
     print("="*70)
     
-    # Configuration
     USE_REAL_DATA = True
     
     REAL_DATA_CONFIG = {
@@ -1686,82 +1892,100 @@ if __name__ == "__main__":
         "wavelength_range": (197.001, 973.5891),
     }
     
-    # Load data (reuse load_real_data from filter_comparison.py if available)
-    # For standalone execution, generate synthetic data
-    if USE_REAL_DATA:
+    # Load data
+    if USE_REAL_DATA: 
         try:
-            # Try to import from filter_comparison.py
-            import sys
-            sys.path.append(os.path.dirname(__file__))
-            from filter_comparison import load_real_data
+            from libs_preprocessing import load_irish_soil_data
             
-            spectra_raw, labels, wavelengths = load_real_data(
-                REAL_DATA_CONFIG["filepath"],
-                wavelengths_in_first_column=True,
-                sample_names_in_first_row=True,
-                wavelength_range=REAL_DATA_CONFIG["wavelength_range"]
+            spectra_raw, sample_names, wavelengths = load_irish_soil_data(
+                REAL_DATA_CONFIG["filepath"]
             )
+            
         except Exception as e:
-            print(f"\n⚠️  Could not load real data: {e}")
+            print(f"\n⚠️ Could not load real data: {e}")
             print("Falling back to synthetic data.. .\n")
             USE_REAL_DATA = False
     
     if not USE_REAL_DATA: 
-        # Generate synthetic LIBS data
-        print("\nGenerating synthetic LIBS data...")
+        print("\nGenerating synthetic data...")
         np.random.seed(42)
-        n_samples = 324
-        n_features = 12981
+        n_samples, n_features = 324, 12981
         wavelengths = np.linspace(197.001, 973.5891, n_features)
+        sample_names = np.array([f"Sample_{i+1}" for i in range(n_samples)])
         
         spectra_raw = np.zeros((n_samples, n_features))
         for i in range(n_samples):
-            # Baseline (Bremsstrahlung continuum)
             baseline = 1000 * np.exp(-0.005 * (wavelengths - 200))
-            
-            # Peaks
-            peak_positions = [253.5, 255.3, 742.4, 744.2, 746.8, 766.5, 769.9]
+            peak_positions = [253.5, 255.3, 742.4, 766.5]
             for pos in peak_positions:
                 intensity = np.random.uniform(500, 2000)
                 peak = intensity * np.exp(-0.5 * ((wavelengths - pos) / 0.5)**2)
                 spectra_raw[i] += peak
-            
             spectra_raw[i] += baseline
             spectra_raw[i] += np.random.normal(0, 50, n_features)
+    
+    # Run comparison for BOTH objectives (if classification enabled)
+    if ENABLE_CLASSIFICATION and sample_names is not None:
+        print("\n" + "="*70)
+        print("COMPARISON 1: NUTRIENT CLASSIFICATION")
+        print("="*70)
+        results_nutrient = compare_baseline_methods(
+            spectra_raw, wavelengths, sample_names,
+            objective='nutrient', verbose=True
+        )
         
-        print(f"Generated:  {spectra_raw.shape}")
-    
-    # Run comparison
-    results = compare_baseline_methods(spectra_raw, wavelengths, verbose=True)
-    
-    # Display results
-    print_results_table(results)
-    
-    # Generate recommendation
-    recommended, justification = generate_recommendation(results)
-    
-    print("\n" + "="*70)
-    print("RECOMMENDATION")
-    print("="*70)
-    print(justification)
-    
-    # Save report
-    save_recommendation_report(results, recommended, justification)
-    
-    # Visualize
-    plot_baseline_comparison(
-        spectra_raw[0],
-        wavelengths,
-        results,
-        recommended,
-        save_path='baseline_comparison.png'
-    )
+        print("\n" + "="*70)
+        print("COMPARISON 2: CONTAMINANT DETECTION")
+        print("="*70)
+        results_contaminant = compare_baseline_methods(
+            spectra_raw, wavelengths, sample_names,
+            objective='contaminant', verbose=True
+        )
+        
+        # Generate recommendations for BOTH
+        print("\n" + "="*70)
+        print("NUTRIENT CLASSIFICATION RECOMMENDATION")
+        print("="*70)
+        recommended_nut, justification_nut = generate_recommendation(results_nutrient)
+        print(justification_nut)
+        
+        print("\n" + "="*70)
+        print("CONTAMINANT DETECTION RECOMMENDATION")
+        print("="*70)
+        recommended_con, justification_con = generate_recommendation(results_contaminant)
+        print(justification_con)
+        
+        # Save both reports
+        save_recommendation_report(results_nutrient, recommended_nut, justification_nut,
+                                  'baseline_recommendation_nutrient.txt')
+        save_recommendation_report(results_contaminant, recommended_con, justification_con,
+                                  'baseline_recommendation_contaminant.txt')
+        
+        # Visualize nutrient results
+        plot_baseline_comparison(spectra_raw[0], wavelengths, results_nutrient,
+                                recommended_nut, save_path='baseline_comparison_nutrient.png')
+        
+    else:
+        # Fallback:  spectral quality only
+        print("\n⚠️ Running spectral quality comparison only")
+        results = compare_baseline_methods(spectra_raw, wavelengths, verbose=True)
+        
+        print_results_table(results)
+        recommended, justification = generate_recommendation(results)
+        
+        print("\n" + "="*70)
+        print("RECOMMENDATION")
+        print("="*70)
+        print(justification)
+        
+        save_recommendation_report(results, recommended, justification)
+        plot_baseline_comparison(spectra_raw[0], wavelengths, results, recommended,
+                                save_path='baseline_comparison. png')
     
     print("\n" + "="*70)
     print("NEXT STEPS")
     print("="*70)
-    print("1. Review 'baseline_recommendation.txt' for detailed justification")
-    print("2. Update 'libs_preprocessing.py' with recommended method")
-    print("3. Run 'filter_comparison.py' to select optimal smoothing filter")
-    print("4. Proceed with full preprocessing pipeline")
+    print("1. Review recommendation reports")
+    print("2. Update libs_preprocessing.py with optimal baseline method")
+    print("3. Proceed to Phase 2: Feature Selection")
     print("="*70)
