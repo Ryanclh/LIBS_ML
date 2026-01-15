@@ -46,13 +46,13 @@ warnings.filterwarnings('ignore')
 def asls_baseline(spectrum: np.ndarray, lam: float = 1e6, p: float = 0.01, 
                   max_iter: int = 10) -> np.ndarray:
     """
-    Asymmetric Least Squares baseline correction. 
+    Asymmetric Least Squares baseline correction.
     
     Justification: r=0.93, 19% RMSE improvement [221]
     
     Parameters
     ----------
-    spectrum : np. ndarray
+    spectrum : np.ndarray
         Input spectrum
     lam : float
         Smoothness parameter (higher = smoother baseline)
@@ -68,7 +68,7 @@ def asls_baseline(spectrum: np.ndarray, lam: float = 1e6, p: float = 0.01,
     """
     L = len(spectrum)
     D = sparse.diags([1, -2, 1], [0, -1, -2], shape=(L, L-2))
-    D = lam * D. dot(D. T)
+    D = lam * D.dot(D.T)
     
     w = np.ones(L)
     W = sparse.spdiags(w, 0, L, L)
@@ -144,7 +144,7 @@ def snip_baseline(spectrum: np.ndarray, iterations: int = 50) -> np.ndarray:
         
     Returns
     -------
-    baseline : np. ndarray
+    baseline : np.ndarray
         Estimated baseline
     """
     # Work in log space for numerical stability
@@ -177,7 +177,7 @@ def polynomial_baseline(spectrum: np.ndarray, degree: int = 5) -> np.ndarray:
         
     Returns
     -------
-    baseline : np. ndarray
+    baseline : np.ndarray
         Estimated baseline
     """
     x = np.arange(len(spectrum))
@@ -197,7 +197,7 @@ def calculate_edge_stability(corrected:  np.ndarray,
     """
     Calculate edge effect stability for baseline-corrected spectrum.
     
-    Polynomials are notorious for "wagging" (oscillating) at endpoints. 
+    Polynomials are notorious for "wagging" (oscillating) at endpoints.
     This test quantifies edge instability vs center stability.
     
     Parameters
@@ -215,7 +215,7 @@ def calculate_edge_stability(corrected:  np.ndarray,
         Standard deviation of last edge_size points
     ratio : float
         Max(left_std, right_std) / center_std
-        Values > 2. 0 indicate significant edge instability
+        Values > 2.0 indicate significant edge instability
     """
     if len(corrected) < 3 * edge_size:
         # Too short for meaningful edge analysis
@@ -268,14 +268,14 @@ def rolling_ball_baseline(spectrum: np.ndarray, radius: int = 50) -> np.ndarray:
     
     Parameters
     ----------
-    spectrum : np. ndarray
+    spectrum : np.ndarray
         Input spectrum
     radius : int
         Ball radius
         
     Returns
     -------
-    baseline : np. ndarray
+    baseline : np.ndarray
         Estimated baseline
     """
     # Approximate rolling ball with minimum filter
@@ -302,7 +302,7 @@ def median_baseline(spectrum: np.ndarray, window: int = 101) -> np.ndarray:
         
     Returns
     -------
-    baseline : np. ndarray
+    baseline : np.ndarray
         Estimated baseline
     """
     if window % 2 == 0:
@@ -321,15 +321,15 @@ def generate_synthetic_ground_truth(
     Generate synthetic spectrum with known Gaussian peak on real baseline.
     
     Strategy:
-    1. Take a "clean" region of real spectrum (no peaks, just baseline)
-    2. Add synthetic Gaussian peak with known height
-    3. Use this as ground truth to test baseline correction accuracy
+    1.Take a "clean" region of real spectrum (no peaks, just baseline)
+    2.Add synthetic Gaussian peak with known height
+    3.Use this as ground truth to test baseline correction accuracy
     
     Parameters
     ----------
     base_spectrum :  np.ndarray
         Real spectrum to use as baseline template
-    wavelengths : np. ndarray
+    wavelengths : np.ndarray
         Wavelength values in nm
     peak_position_nm : float
         Where to insert synthetic peak (nm)
@@ -355,7 +355,7 @@ def generate_synthetic_ground_truth(
     synthetic = np.ones_like(base_spectrum) * baseline_level
     
     # Add slight noise to make it realistic
-    synthetic += np.random. normal(0, baseline_level * 0.02, len(synthetic))
+    synthetic += np.random.normal(0, baseline_level * 0.02, len(synthetic))
     
     # Find index closest to desired peak position
     peak_index = np.argmin(np.abs(wavelengths - peak_position_nm))
@@ -414,7 +414,7 @@ def calculate_peak_recovery_rate(
 def test_synthetic_ground_truth(
     baseline_func,
     base_spectrum: np.ndarray,
-    wavelengths: np. ndarray,
+    wavelengths: np.ndarray,
     n_tests: int = 5
 ) -> Tuple[float, float]: 
     """
@@ -426,9 +426,9 @@ def test_synthetic_ground_truth(
     ----------
     baseline_func : callable
         Baseline correction function to test
-    base_spectrum : np. ndarray
+    base_spectrum : np.ndarray
         Real spectrum template
-    wavelengths : np. ndarray
+    wavelengths : np.ndarray
         Wavelength values
     n_tests : int
         Number of synthetic peaks to test at different positions
@@ -441,7 +441,7 @@ def test_synthetic_ground_truth(
         Standard deviation (consistency measure)
     """
     # Test peaks at different wavelength positions
-    wl_min, wl_max = wavelengths. min(), wavelengths.max()
+    wl_min, wl_max = wavelengths.min(), wavelengths.max()
     test_positions = np.linspace(wl_min + 100, wl_max - 100, n_tests)
     
     recovery_rates = []
@@ -460,7 +460,7 @@ def test_synthetic_ground_truth(
             
             # Measure recovery
             recovery = calculate_peak_recovery_rate(corrected, true_height, peak_idx)
-            recovery_rates. append(recovery)
+            recovery_rates.append(recovery)
         except Exception: 
             # If method fails, record 0% recovery
             recovery_rates.append(0.0)
@@ -511,7 +511,7 @@ def calculate_peak_preservation(original: np.ndarray,
     correlation = np.corrcoef(orig_norm, corr_norm)[0, 1]
     return correlation
 
-def calculate_peak_distortion(original: np. ndarray, corrected: np.ndarray) -> float:
+def calculate_peak_distortion(original: np.ndarray, corrected: np.ndarray) -> float:
     """
     Calculate percentage change in peak heights.
     
@@ -540,7 +540,7 @@ def calculate_peak_distortion(original: np. ndarray, corrected: np.ndarray) -> f
 
 def calculate_residual_quality(spectrum: np.ndarray, baseline: np.ndarray) -> float:
     """
-    Calculate standard deviation of residual. 
+    Calculate standard deviation of residual.
     
     Lower = baseline fits better
     """
@@ -724,7 +724,7 @@ def compare_baseline_methods(
             flatness_scores.append(calculate_baseline_flatness(corrected))
             preservation_scores.append(calculate_peak_preservation(original, corrected))
             residual_scores.append(calculate_residual_quality(original, baseline))
-            distortion_scores. append(calculate_peak_distortion(original, corrected))
+            distortion_scores.append(calculate_peak_distortion(original, corrected))
             times.append(elapsed_ms)
             
             # Edge stability metrics
@@ -781,9 +781,9 @@ def compare_baseline_methods(
             peak_preservation=np.mean(preservation_scores),
             residual_std=np.mean(residual_scores),
             peak_distortion=np.mean(distortion_scores),
-            computation_time_ms=np. mean(times),
+            computation_time_ms=np.mean(times),
             parameter_complexity=config['params'],
-            edge_stability_left=np. mean(edge_left_scores),
+            edge_stability_left=np.mean(edge_left_scores),
             edge_stability_right=np.mean(edge_right_scores),
             edge_stability_ratio=np.mean(edge_ratio_scores),
             peak_recovery_rate=mean_recovery,
@@ -794,10 +794,10 @@ def compare_baseline_methods(
             m = results[name]
             print(f"  Baseline Flatness:     {m.baseline_flatness:.4f} (lower=better)")
             print(f"  Peak Preservation:    {m.peak_preservation:.4f} (higher=better)")
-            print(f"  Edge Stability:       L={m.edge_stability_left:.4f}, R={m. edge_stability_right:.4f}, Ratio={m.edge_stability_ratio:.2f}")
+            print(f"  Edge Stability:       L={m.edge_stability_left:.4f}, R={m.edge_stability_right:.4f}, Ratio={m.edge_stability_ratio:.2f}")
             if m.edge_stability_ratio > 2.0:
                 print(f"  ⚠️ WARNING: High edge instability")
-            print(f"  Peak Recovery:        {m. peak_recovery_rate:.2f}% (±{std_recovery:.2f}%)")
+            print(f"  Peak Recovery:        {m.peak_recovery_rate:.2f}% (±{std_recovery:.2f}%)")
             if m.peak_recovery_rate < 95.0 or m.peak_recovery_rate > 105.0:
                 print(f"  ⚠️ WARNING: Peak height deviation")
             if y_encoded is not None:
@@ -844,17 +844,14 @@ def generate_recommendation(results: Dict[str, BaselineMetrics]) -> Tuple[str, s
     scores = {}
     for i, method in enumerate(methods):
         score = (
-            flatness_scores[i] * 0.20 +      # Reduced from 25%
-            preservation_scores[i] * 0.30 +  # Reduced from 35%
-            distortion_scores[i] * 0.05 +    # Reduced from 15%
-            edge_scores[i] * 0.15 +          # Same
-            recovery_scores[i] * 0.25 +      # NEW: 25% weight - CRITICAL
-            time_scores[i] * 0.05            # Reduced from 10%
+            preservation_scores[i] * 0.40 +  # Peak Preservation: 40%
+            flatness_scores[i] * 0.30 +      # Baseline Flatness: 30%
+            edge_scores[i] * 0.20 +          # Edge Stability: 20%
+            time_scores[i] * 0.10            # Computational Efficiency: 10%
         )
         scores[method] = score
-    
     # Find best
-    recommended = max(scores, key=scores. get)
+    recommended = max(scores, key=scores.get)
     asls_methods = {k: v for k, v in results.items() if k.startswith('AsLS')}
     best_asls = max(asls_methods, key=lambda x: scores[x]) if asls_methods else None
     
@@ -874,22 +871,20 @@ PERFORMANCE METRICS:
   Peak Recovery Rate:   {best_metrics.peak_recovery_rate:.2f}% (100% = ideal)
   Computation Time:     {best_metrics.computation_time_ms:.3f} ms/spectrum
 
-WEIGHTED SCORE: {scores[recommended]:.2f}/100
-  20% Baseline flatness
-  30% Peak preservation (CRITICAL for LIBS)
-  15% Edge stability (polynomial oscillation check)
-  25% Peak recovery (quantitative accuracy validation)
-  5% Peak distortion
-  5% Computation time
+SELECTION CRITERIA (FYP Requirements):
+  40% Peak Preservation - Maintains atomic emission line integrity for accurate elemental identification
+  30% Baseline Flatness - Ensures consistent spectral baseline for reliable intensity measurements  
+  20% Edge Stability - Prevents endpoint oscillations (Runge's phenomenon) in 200-950nm range
+  10% Computational Efficiency - Meets TinyML constraints for embedded deployment (<50ms inference)
 
 """
     
     # Peak recovery interpretation
-    if 95.0 <= best_metrics. peak_recovery_rate <= 105.0:
+    if 95.0 <= best_metrics.peak_recovery_rate <= 105.0:
         justification += f"""
 ✓ EXCELLENT QUANTITATIVE ACCURACY: 
   Peak recovery = {best_metrics.peak_recovery_rate:.2f}% (within 5% of true height)
-  Synthetic ground truth test confirms reliable peak height preservation. 
+  Synthetic ground truth test confirms reliable peak height preservation.
   Suitable for quantitative LIBS analysis (elemental concentration estimation).
   
 """
@@ -908,7 +903,7 @@ WEIGHTED SCORE: {scores[recommended]:.2f}/100
     else:  # > 105%
         justification += f"""
 ⚠️ PEAK HEIGHT OVER-ESTIMATION:
-  Peak recovery = {best_metrics. peak_recovery_rate:.2f}% (>105%)
+  Peak recovery = {best_metrics.peak_recovery_rate:.2f}% (>105%)
   Baseline under-corrected, leaving residual background under peaks.
   
   IMPACT: 
@@ -919,7 +914,7 @@ WEIGHTED SCORE: {scores[recommended]:.2f}/100
 """
     
     # Edge stability (keep existing logic)
-    if best_metrics. edge_stability_ratio > 2.5:
+    if best_metrics.edge_stability_ratio > 2.5:
         justification += f"""
 ⚠️ EDGE EFFECT WARNING:
   Edge ratio = {best_metrics.edge_stability_ratio:.2f} - restrict analysis to 250-900nm
@@ -927,7 +922,7 @@ WEIGHTED SCORE: {scores[recommended]:.2f}/100
 """
     elif best_metrics.edge_stability_ratio > 2.0:
         justification += f"""
-⚠️ MODERATE EDGE INSTABILITY:  Monitor endpoint behavior. 
+⚠️ MODERATE EDGE INSTABILITY:  Monitor endpoint behavior.
   
 """
     else:
@@ -937,11 +932,11 @@ WEIGHTED SCORE: {scores[recommended]:.2f}/100
 """
     
     # Method-specific interpretation
-    if recommended. startswith('AsLS'):
+    if recommended.startswith('AsLS'):
         justification += f"""
 INTERPRETATION: 
-Confirms literature justification [221]:  AsLS r=0.93, 19% RMSE improvement. 
-Peak recovery {best_metrics.peak_recovery_rate:.1f}% validates quantitative reliability. 
+Confirms literature justification [221]:  AsLS r=0.93, 19% RMSE improvement.
+Peak recovery {best_metrics.peak_recovery_rate:.1f}% validates quantitative reliability.
 
 DEPLOYMENT for TinyML:
   - Time:  {best_metrics.computation_time_ms:.2f} ms (acceptable for MCU)
@@ -952,7 +947,7 @@ DEPLOYMENT for TinyML:
     elif recommended.startswith('Polynomial'):
         justification += f"""
 INTERPRETATION:
-Polynomial shows best overall performance. 
+Polynomial shows best overall performance.
 
 CRITICAL VALIDATION:
   - Peak recovery: {best_metrics.peak_recovery_rate:.1f}% 
@@ -1070,7 +1065,7 @@ WEIGHTED SCORE: {scores[recommended]:.2f}/100
         justification += f"""
 ⚠️  MODERATE EDGE INSTABILITY:
   Edge instability ratio = {best_metrics.edge_stability_ratio:.2f}
-  Endpoints show 2x more variation than center region. 
+  Endpoints show 2x more variation than center region.
   Acceptable for most applications but monitor edge behavior.
   
 """
@@ -1108,7 +1103,7 @@ DEPLOYMENT for TinyML:
     elif recommended.startswith('Polynomial'):
         justification += f"""
 INTERPRETATION: 
-Polynomial baseline shows best overall performance for your data. 
+Polynomial baseline shows best overall performance for your data.
 
 ADVANTAGES for TinyML:
   - LOWEST computational cost ({best_metrics.computation_time_ms:.2f} ms)
@@ -1125,9 +1120,9 @@ CRITICAL LIMITATION - EDGE EFFECTS:
   Your data shows edge ratio = {best_metrics.edge_stability_ratio:.2f}
   
   REQUIRED ACTIONS:
-  1. Restrict wavelength analysis to 250-900nm (trim 50 points each end)
-  2. Document effective range in thesis:  "Polynomial baseline valid 250-900nm"
-  3. If N, P, K peaks fall in 200-250nm or 900-950nm, MUST use AsLS instead
+  1.Restrict wavelength analysis to 250-900nm (trim 50 points each end)
+  2.Document effective range in thesis:  "Polynomial baseline valid 250-900nm"
+  3.If N, P, K peaks fall in 200-250nm or 900-950nm, MUST use AsLS instead
   
   ALTERNATIVE: Use {best_asls} (edge ratio:  {results[best_asls].edge_stability_ratio:.2f})
   
@@ -1159,7 +1154,7 @@ COMPARISON TO AsLS [221]:
         if best_asls: 
             asls_metrics = results[best_asls]
             justification += f"  Best AsLS:   {best_asls} (score={scores[best_asls]:.2f})\n"
-            justification += f"  Flatness:       {recommended}:  {best_metrics.baseline_flatness:.6f} vs AsLS: {asls_metrics. baseline_flatness:.6f}\n"
+            justification += f"  Flatness:       {recommended}:  {best_metrics.baseline_flatness:.6f} vs AsLS: {asls_metrics.baseline_flatness:.6f}\n"
             justification += f"  Preservation: {recommended}:  {best_metrics.peak_preservation:.4f} vs AsLS:  {asls_metrics.peak_preservation:.4f}\n"
             justification += f"  Edge Ratio:    {recommended}: {best_metrics.edge_stability_ratio:.2f} vs AsLS: {asls_metrics.edge_stability_ratio:.2f}\n"
             justification += f"  Time:         {recommended}: {best_metrics.computation_time_ms:.2f} ms vs AsLS: {asls_metrics.computation_time_ms:.2f} ms\n"
@@ -1270,7 +1265,7 @@ def plot_baseline_comparison(
         else:
             continue
         
-        corrected = np. maximum(spectrum - baseline, 0)
+        corrected = np.maximum(spectrum - baseline, 0)
         ax3.plot(wl_region, corrected[baseline_region], color=color,
                 linewidth=1.2, label=label, alpha=0.7)
     
@@ -1330,7 +1325,7 @@ def plot_baseline_comparison(
         else:
             continue
         
-        corrected = np. maximum(spectrum - baseline, 0)
+        corrected = np.maximum(spectrum - baseline, 0)
         ax5.plot(wl_right, corrected[edge_right], color=color,
                 linewidth=1.5, label=label, alpha=0.8, marker='o', markersize=3)
     
@@ -1347,7 +1342,7 @@ def plot_baseline_comparison(
     asls_names = list(asls_methods.keys())
     
     if asls_names:
-        asls_flat = [results[m]. baseline_flatness for m in asls_names]
+        asls_flat = [results[m].baseline_flatness for m in asls_names]
         asls_pres = [results[m].peak_preservation for m in asls_names]
         asls_edge = [results[m].edge_stability_ratio for m in asls_names]
         
@@ -1369,7 +1364,7 @@ def plot_baseline_comparison(
     plt.tight_layout(rect=[0, 0, 1, 0.99])
     
     if save_path:
-        path1 = save_path. replace('.png', '_spectral.png')
+        path1 = save_path.replace('.png', '_spectral.png')
         fig1.savefig(path1, dpi=150, bbox_inches='tight')
         print(f"\n✓ Figure 1 saved to: {path1}")
     
@@ -1606,21 +1601,18 @@ def plot_baseline_comparison(
     recovery_all = np.array([results[m].peak_recovery_rate for m in methods])
     
     scores = {}
+    # Calculate scores using FYP criteria
     for i, method in enumerate(methods):
         flatness_score = 100 * (1 - (flatness_all[i] - flatness_all.min()) / (flatness_all.max() - flatness_all.min() + 1e-10))
         preservation_score = 100 * preservation_all[i]
-        distortion_score = 100 * (1 - (distortion_all[i] - distortion_all.min()) / (distortion_all.max() - distortion_all.min() + 1e-10))
         time_score = 100 * (1 - (time_all[i] - time_all.min()) / (time_all.max() - time_all.min() + 1e-10))
         edge_score = 100 * (1 - np.clip((edge_ratio_all[i] - 1.0) / 3.0, 0, 1))
-        recovery_score = 100 * (1 - np.abs(recovery_all[i] - 100.0) / 100.0)
         
         scores[method] = (
-            flatness_score * 0.20 +
-            preservation_score * 0.30 +
-            distortion_score * 0.05 +
-            edge_score * 0.15 +
-            recovery_score * 0.25 +
-            time_score * 0.05
+            preservation_score * 0.40 +      # 40% Peak Preservation
+            flatness_score * 0.30 +          # 30% Baseline Flatness
+            edge_score * 0.20 +              # 20% Edge Stability
+            time_score * 0.10                # 10% Computational Efficiency
         )
     
     sorted_methods = sorted(scores, key=scores.get, reverse=True)
@@ -1711,22 +1703,32 @@ def print_results_table(results: Dict[str, BaselineMetrics]) -> None:
     except ImportError:
         use_tabulate = False
     
-    headers = ['Method', 'Flatness', 'Preservation', 'Edge Ratio', 'Peak Recovery', 'Time(ms)']
+    headers = ['Method', 'Preservation', 'Flatness', 'Edge Ratio', 'Time(ms)', 'Score']
     
     rows = []
     for name, m in results.items():
         edge_flag = " ⚠️" if m.edge_stability_ratio > 2.0 else ""
-        recovery_flag = ""
-        if m.peak_recovery_rate < 95.0 or m.peak_recovery_rate > 105.0:
-            recovery_flag = " ⚠️"
+        
+        # Calculate score using FYP criteria
+        preservation_score = 100 * m.peak_preservation
+        flatness_score = 100 * (1 - (m.baseline_flatness - min([r.baseline_flatness for r in results.values()])) / 
+                            (max([r.baseline_flatness for r in results.values()]) - 
+                                min([r.baseline_flatness for r in results.values()]) + 1e-10))
+        edge_score = 100 * (1 - np.clip((m.edge_stability_ratio - 1.0) / 3.0, 0, 1))
+        time_score = 100 * (1 - (m.computation_time_ms - min([r.computation_time_ms for r in results.values()])) / 
+                            (max([r.computation_time_ms for r in results.values()]) - 
+                            min([r.computation_time_ms for r in results.values()]) + 1e-10))
+        
+        total_score = (preservation_score * 0.40 + flatness_score * 0.30 + 
+                    edge_score * 0.20 + time_score * 0.10)
         
         rows.append([
             name,
-            f"{m.baseline_flatness:.6f}",
             f"{m.peak_preservation:.4f}",
+            f"{m.baseline_flatness:.6f}",
             f"{m.edge_stability_ratio:.2f}{edge_flag}",
-            f"{m.peak_recovery_rate:.2f}%{recovery_flag}",
-            f"{m.computation_time_ms:.3f}"
+            f"{m.computation_time_ms:.3f}",
+            f"{total_score:.2f}"
         ])
     
     print("\n" + "="*110)
@@ -1848,11 +1850,11 @@ def save_recommendation_report(
         f.write("\n" + "="*70 + "\n")
         f.write("IMPLEMENTATION NOTES\n")
         f.write("="*70 + "\n\n")
-        f.write("1. Copy the recommended baseline function from baseline_comparison.py\n")
-        f.write("2. Replace the asls_baseline() function in libs_preprocessing.py\n")
-        f.write("3. Update parameters in apply_baseline_correction()\n")
-        f.write("4. Run filter_comparison.py to select optimal smoothing filter\n")
-        f.write("5. Proceed with full preprocessing pipeline\n\n")
+        f.write("1.Copy the recommended baseline function from baseline_comparison.py\n")
+        f.write("2.Replace the asls_baseline() function in libs_preprocessing.py\n")
+        f.write("3.Update parameters in apply_baseline_correction()\n")
+        f.write("4.Run filter_comparison.py to select optimal smoothing filter\n")
+        f.write("5.Proceed with full preprocessing pipeline\n\n")
     
     print(f"\n✓ Recommendation report saved to: {filepath}")
 
@@ -1886,7 +1888,7 @@ if __name__ == "__main__":
             
         except Exception as e:
             print(f"\n⚠️ Could not load real data: {e}")
-            print("Falling back to synthetic data.. .\n")
+            print("Falling back to synthetic data...\n")
             USE_REAL_DATA = False
     
     if not USE_REAL_DATA: 
@@ -1963,12 +1965,12 @@ if __name__ == "__main__":
         
         save_recommendation_report(results, recommended, justification)
         plot_baseline_comparison(spectra_raw[0], wavelengths, results, recommended,
-                                save_path='baseline_comparison. png')
+                                save_path='baseline_comparison.png')
     
     print("\n" + "="*70)
     print("NEXT STEPS")
     print("="*70)
-    print("1. Review recommendation reports")
-    print("2. Update libs_preprocessing.py with optimal baseline method")
-    print("3. Proceed to Phase 2: Feature Selection")
+    print("1.Review recommendation reports")
+    print("2.Update libs_preprocessing.py with optimal baseline method")
+    print("3.Proceed to Phase 2: Feature Selection")
     print("="*70)
