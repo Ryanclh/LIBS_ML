@@ -37,7 +37,7 @@ def load_irish_soil_data(
     
     Expected format:
     - First column:  Wavelengths (197.001 - 973.5891 nm) as row index
-    - First row: Sample names (Clay_1, Clay_2, .. ., Clay_320) as column headers
+    - First row: Sample names (Clay_1, Clay_2, ..., Clay_320) as column headers
     - Data:  12,981 rows (wavelengths) × 320 columns (samples)
     
     NO LABELS INCLUDED - Classification labels must be added separately
@@ -97,7 +97,7 @@ def load_irish_soil_data(
     print(f"\n{'='*70}")
     print("DATA LOADING SUMMARY")
     print(f"{'='*70}")
-    print(f"Samples:        {n_samples} (Clay_1 ...  Clay_{n_samples})")
+    print(f"Samples:        {n_samples} (Clay_1 ... Clay_{n_samples})")
     print(f"Features:      {len(wavelengths)} wavelengths")
     print(f"Wavelengths:   {wavelengths.min():.3f} - {wavelengths.max():.3f} nm")
     print(f"Intensity range: {spectra.min():.2f} - {spectra.max():.2f}")
@@ -135,10 +135,10 @@ def asls_baseline(
     spectrum : np.ndarray
         Single spectrum (1D array)
     lam : float
-        Smoothness parameter (λ). Higher = smoother baseline.  
+        Smoothness parameter (λ).Higher = smoother baseline. 
         Recommended: 1e6 for LIBS (validated by baseline_comparison.py)
     p : float
-        Asymmetry parameter.  Lower = baseline follows valleys better.
+        Asymmetry parameter. Lower = baseline follows valleys better.
         Recommended: 0.01 for LIBS
     max_iter : int
         Maximum iterations for convergence
@@ -179,7 +179,7 @@ def polynomial_baseline(
     
     Parameters
     ----------
-    spectrum : np. ndarray
+    spectrum : np.ndarray
         Single spectrum (1D array)
     degree : int
         Polynomial degree (default: 5, validated optimal)
@@ -300,7 +300,7 @@ def generate_contaminant_labels(sample_names: np.ndarray) -> np.ndarray:
         if 'tph' in n:
             labels.append(1)  # Total Petroleum Hydrocarbons (Diesel)
         elif 'arsenic' in n:
-            labels. append(1)  # Heavy Metal (As)
+            labels.append(1)  # Heavy Metal (As)
         elif 'heavymetals' in n: 
             labels.append(1)  # Heavy Metals mix (Pb, Cd, Cr)
         elif 'chalkt' in n:
@@ -314,7 +314,7 @@ def generate_contaminant_labels(sample_names: np.ndarray) -> np.ndarray:
         elif 'chalk_' in n:  # Non-treated chalk
             labels.append(0)
         elif 'gravel' in n:
-            labels. append(0)
+            labels.append(0)
         elif 'sandy' in n:
             labels.append(0)
         elif 'garden' in n:
@@ -326,8 +326,8 @@ def generate_contaminant_labels(sample_names: np.ndarray) -> np.ndarray:
     labels = np.array(labels)
     
     # Summary statistics
-    n_clean = np. sum(labels == 0)
-    n_contaminated = np. sum(labels == 1)
+    n_clean = np.sum(labels == 0)
+    n_contaminated = np.sum(labels == 1)
     
     print(f"\n{'='*70}")
     print("CONTAMINANT DETECTION LABELS GENERATED")
@@ -352,7 +352,7 @@ def stratified_split_with_labels(
     
     Parameters
     ----------
-    spectra : np. ndarray
+    spectra : np.ndarray
         Preprocessed spectra
     labels : np.ndarray
         Class labels (may include -1 for excluded samples)
@@ -375,7 +375,7 @@ def stratified_split_with_labels(
         valid_mask = labels != -1
         spectra = spectra[valid_mask]
         labels = labels[valid_mask]
-        print(f"Excluded {np. sum(~valid_mask)} samples with label=-1")
+        print(f"Excluded {np.sum(~valid_mask)} samples with label=-1")
     
     # Stratified split
     X_train, X_test, y_train, y_test = train_test_split(
@@ -445,7 +445,7 @@ def apply_baseline_correction(
     corrected = np.zeros_like(spectra)
     
     if verbose:
-        method_name = f"Polynomial (degree={degree})" if method == 'polynomial' else f"AsLS (λ={lam:. 0e}, p={p})"
+        method_name = f"Polynomial (degree={degree})" if method == 'polynomial' else f"AsLS (λ={lam:.0e}, p={p})"
         print(f"Applying {method_name} baseline correction...")
     
     for i in range(n_samples):
@@ -454,7 +454,7 @@ def apply_baseline_correction(
         elif method == 'asls': 
             baseline = asls_baseline(spectra[i], lam=lam, p=p)
         else:
-            raise ValueError(f"Unknown method: {method}. Use 'polynomial' or 'asls'")
+            raise ValueError(f"Unknown method: {method}.Use 'polynomial' or 'asls'")
         
         corrected[i] = spectra[i] - baseline
         
@@ -480,7 +480,7 @@ def apply_savgol_filter(
     polyorder: int = 2
 ) -> np.ndarray:
     """
-    Apply Savitzky-Golay smoothing filter. 
+    Apply Savitzky-Golay smoothing filter.
     
     Justification:  Standard LIBS practice [228]
     
@@ -499,12 +499,12 @@ def apply_savgol_filter(
         
     Returns
     -------
-    smoothed : np. ndarray
+    smoothed : np.ndarray
         Smoothed spectra
     """
     if window_length % 2 == 0:
         window_length += 1
-        warnings.warn(f"Window length must be odd.  Adjusted to {window_length}")
+        warnings.warn(f"Window length must be odd. Adjusted to {window_length}")
     
     smoothed = np.apply_along_axis(
         lambda x: savgol_filter(x, window_length, polyorder),
@@ -611,7 +611,7 @@ def apply_l2_normalization(spectra: np.ndarray) -> np.ndarray:
     - Corrects for shot-to-shot laser energy fluctuations
     - Superior to SNV (RMSE=0.220 - worst performer)
     
-    From normalization_comparison.py: L2-Norm is recommended method. 
+    From normalization_comparison.py: L2-Norm is recommended method.
     
     Parameters
     ----------
@@ -626,7 +626,7 @@ def apply_l2_normalization(spectra: np.ndarray) -> np.ndarray:
     normalized = normalize(spectra, norm='l2', axis=1)
     
     # Verify normalization
-    norms = np.linalg. norm(normalized, axis=1)
+    norms = np.linalg.norm(normalized, axis=1)
     assert np.allclose(norms, 1.0), "L2 normalization failed"
     
     print(f"✓ L2 normalization applied: all spectra scaled to unit norm")
@@ -705,7 +705,7 @@ def preprocess_irish_soil_spectra(
         - 'wavelengths': Wavelength values
     """
     results = {
-        'raw': spectra. copy(),
+        'raw': spectra.copy(),
         'sample_names': sample_names,
         'wavelengths': wavelengths
     }
@@ -714,7 +714,7 @@ def preprocess_irish_soil_spectra(
         print("\n" + "="*70)
         print("IRISH SOIL LIBS PREPROCESSING PIPELINE")
         print("="*70)
-        print(f"Input:  {spectra.shape[0]} samples × {spectra. shape[1]} features")
+        print(f"Input:  {spectra.shape[0]} samples × {spectra.shape[1]} features")
         method_str = f"Poly(deg={baseline_degree})" if baseline_method == 'polynomial' else f"AsLS(λ={asls_lam:.0e})"
         print(f"Methods: {method_str} → SG(w={sg_window},o={sg_order}) → L2-Norm")
         print("="*70)
@@ -727,7 +727,7 @@ def preprocess_irish_soil_spectra(
             print(f"      Justification: baseline_comparison.py validation")
             print(f"                     Best peak recovery + edge stability")
         else:
-            print(f"      Method: AsLS (λ={asls_lam:. 0e}, p={asls_p})")
+            print(f"      Method: AsLS (λ={asls_lam:.0e}, p={asls_p})")
             print(f"      Justification: r=0.93, 19% RMSE improvement [221]")
     
     results['baseline_corrected'] = apply_baseline_correction(
@@ -763,7 +763,7 @@ def preprocess_irish_soil_spectra(
             M=sinc_M
         )
     else:
-        raise ValueError(f"Unknown smoothing method: {smoothing_method}. Use 'savgol' or 'sinc'")
+        raise ValueError(f"Unknown smoothing method: {smoothing_method}.Use 'savgol' or 'sinc'")
     
     # Step 3: Normalization [237]
     if verbose:
@@ -904,7 +904,7 @@ def validate_preprocessing_quality(
     """
     metrics = {}
     
-    # 1. Signal-to-Noise Ratio improvement
+    # 1.Signal-to-Noise Ratio improvement
     flat_region = slice(100, 200)
     noise_raw = np.std(raw[flat_region])
     noise_processed = np.std(processed[flat_region])
@@ -919,19 +919,19 @@ def validate_preprocessing_quality(
     metrics['snr_processed'] = snr_processed
     metrics['snr_improvement_pct'] = (snr_processed - snr_raw) / snr_raw * 100 if snr_raw > 0 else 0
     
-    # 2. Baseline flatness
+    # 2.Baseline flatness
     baseline_region = slice(0, 100)
     metrics['baseline_std_raw'] = np.std(raw[baseline_region])
     metrics['baseline_std_processed'] = np.std(processed[baseline_region])
     
-    # 3. Peak preservation (correlation)
-    metrics['peak_correlation'] = np. corrcoef(raw, processed)[0, 1]
+    # 3.Peak preservation (correlation)
+    metrics['peak_correlation'] = np.corrcoef(raw, processed)[0, 1]
     
-    # 4. Normalization verification
+    # 4.Normalization verification
     metrics['l2_norm'] = np.linalg.norm(processed)
     metrics['is_normalized'] = np.isclose(metrics['l2_norm'], 1.0)
     
-    # 5. Dynamic range
+    # 5.Dynamic range
     metrics['dynamic_range_raw'] = np.max(raw) - np.min(raw)
     metrics['dynamic_range_processed'] = np.max(processed) - np.min(processed)
     
@@ -954,7 +954,7 @@ def plot_preprocessing_stages(
     save_path: Optional[str] = None
 ) -> None:
     """
-    Visualize all preprocessing stages. 
+    Visualize all preprocessing stages.
     
     Parameters
     ----------
@@ -1014,7 +1014,7 @@ def plot_sample_comparison(
     
     Parameters
     ----------
-    spectra : np. ndarray
+    spectra : np.ndarray
         Preprocessed spectra
     sample_names : np.ndarray
         Sample identifiers
@@ -1044,7 +1044,7 @@ def plot_sample_comparison(
     plt.tight_layout()
     
     if save_path:
-        plt. savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"✓ Figure saved to:  {save_path}")
     
     plt.show()
@@ -1102,7 +1102,7 @@ def save_preprocessed_data(
     print(f"  - smoothed: After noise reduction")
     print(f"  - normalized:  FINAL preprocessed (320, 12981)")
     print(f"  - sample_names: Sample identifiers")
-    print(f"  - wavelengths: 197. 001-973.5891 nm")
+    print(f"  - wavelengths: 197.001-973.5891 nm")
     
     if nutrient_labels is not None: 
         print(f"  - nutrient_labels: High/Med/Low (Objective 1)")
@@ -1122,7 +1122,7 @@ def save_preprocessed_data(
     print("  - Use: contaminant_labels (all samples)")
     print(f"{'='*70}")
 
-def load_preprocessed_data(filepath: str = "irish_soil_preprocessed. npz") -> Dict[str, np.ndarray]:
+def load_preprocessed_data(filepath: str = "irish_soil_preprocessed.npz") -> Dict[str, np.ndarray]:
     """
     Load preprocessed data from compressed NumPy file.
     
@@ -1155,62 +1155,131 @@ def load_preprocessed_data(filepath: str = "irish_soil_preprocessed. npz") -> Di
     
     return results
 
-
 # ============================================================================
-# MAIN EXECUTION
+# MAIN EXECUTION - PHASE 1: DATA PREPROCESSING & PREPARATION
 # ============================================================================
 
 if __name__ == "__main__": 
     print("="*70)
-    print("IRISH SOIL LIBS PREPROCESSING PIPELINE")
-    print("Phase 1: Preprocessing + Label Generation")
+    print("PHASE 1: DATA PREPROCESSING & PREPARATION")
+    print("Irish Soil LIBS Dataset (320 samples × 12,981 features)")
     print("="*70)
-    print("\nOPTIMIZED PARAMETERS (from comparison script validation):")
-    print("  • Baseline: Polynomial degree=5 (best peak recovery + edge stability)")
-    print("  • Smoothing: SG window=7, order=2 (optimal noise/peak balance)")
-    print("  • Normalization: L2-Norm (Bias=0.000, RMSE=0.002)")
+    print("\nPipeline:")
+    print("  1.Data Loading")
+    print("  2.Baseline Correction (Polynomial degree=5)")
+    print("  3.Noise Reduction (Savitzky-Golay window=7, order=2)")
+    print("  4.L2 Normalization")
+    print("  5.Label Generation (Nutrient & Contaminant)")
+    print("  6.Stratified Train-Test Split (70/30)")
     print("="*70)
     
-    # -------------------------------------------------------------------------
-    # STEP 1: Load Irish Soil Dataset
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # STEP 1: LOAD IRISH SOIL DATASET (320 samples × 12,981 features)
+    # =========================================================================
     try:
         spectra_raw, sample_names, wavelengths = load_irish_soil_data()
-    except FileNotFoundError as e: 
+        
+        # Verify dataset dimensions
+        assert spectra_raw.shape == (320, 12981), f"Expected (320, 12981), got {spectra_raw.shape}"
+        print(f"\n✓ Dataset verified: {spectra_raw.shape[0]} samples × {spectra_raw.shape[1]} features")
+        
+    except FileNotFoundError as e:
         print(f"\n❌ ERROR: {e}")
         print("\nPlease verify:")
-        print("  1. File path is correct")
-        print("  2. CSV file exists at the specified location")
-        print("  3. File has correct format (wavelengths in rows, samples in columns)")
+        print("  1.File path is correct in load_irish_soil_data() function")
+        print("  2.CSV file exists:  Irish_Soil_DataSet2.csv")
+        print("  3.File format:  wavelengths in rows, samples in columns")
         exit(1)
-    except Exception as e:
-        print(f"\n❌ Unexpected error loading data: {e}")
+    except AssertionError as e:
+        print(f"\n❌ Dataset dimension mismatch: {e}")
+        print("   Expected: 320 samples (Clay_1...Clay_320) × 12,981 wavelengths")
         exit(1)
     
-    # -------------------------------------------------------------------------
-    # STEP 2: Run Preprocessing Pipeline
-    # -------------------------------------------------------------------------
-    # Parameters optimized from comparison scripts: 
-    # - baseline_comparison.py → AsLS lam=1e6, p=0.01
-    # - filter_comparison.py → smoothing_method='savgol' (or 'sinc' if validated better)
-    # - normalization_comparison.py → L2-Norm
+    # =========================================================================
+    # STEP 2: RUN PREPROCESSING PIPELINE
+    # =========================================================================
+    print("\n" + "="*70)
+    print("STEP 2: PREPROCESSING PIPELINE")
+    print("="*70)
+    print("Configuration (validated by comparison scripts):")
+    print("  • Baseline:     Polynomial degree=5")
+    print("  • Smoothing:   Savitzky-Golay window=7, order=2")
+    print("  • Normalization: L2-Norm (unit vector)")
+    print("="*70)
     
     results = preprocess_irish_soil_spectra(
         spectra_raw,
         sample_names,
         wavelengths,
-        # VALIDATED OPTIMAL PARAMETERS
-        baseline_method='polynomial',  # From baseline_comparison.py
-        baseline_degree=5,              # Validated best
-        sg_window=7,                    # From filter_comparison.py
-        sg_order=2,                     # Validated best
+        baseline_method='polynomial',
+        baseline_degree=5,
+        smoothing_method='savgol',
+        sg_window=7,
+        sg_order=2,
         verbose=True
     )
-
-    # -------------------------------------------------------------------------
-    # STEP 3: Validate Preprocessing Quality
-    # -------------------------------------------------------------------------
-    print("\nValidating preprocessing quality on sample Clay_1...")
+    
+    # =========================================================================
+    # STEP 3: GENERATE LABELS (From Sample Names)
+    # =========================================================================
+    print("\n" + "="*70)
+    print("STEP 3: LABEL GENERATION")
+    print("="*70)
+    
+    # Generate labels for BOTH objectives
+    nutrient_labels = generate_nutrient_labels(sample_names)
+    contaminant_labels = generate_contaminant_labels(sample_names)
+    
+    # =========================================================================
+    # STEP 4: STRATIFIED TRAIN-TEST SPLIT (70% Train / 30% Test)
+    # =========================================================================
+    print("\n" + "="*70)
+    print("STEP 4: STRATIFIED TRAIN-TEST SPLIT")
+    print("="*70)
+    print("Split ratio: 70% Training / 30% Testing")
+    print("Method: Stratified sampling (preserves class distribution)")
+    
+    # --- OBJECTIVE 1: NUTRIENT CLASSIFICATION (High/Med/Low) ---
+    print("\n" + "-"*70)
+    print("OBJECTIVE 1: NUTRIENT CLASSIFICATION (High/Med/Low)")
+    print("-"*70)
+    
+    X_train_nut, X_test_nut, y_train_nut, y_test_nut = stratified_split_with_labels(
+        spectra=results['normalized'],
+        labels=nutrient_labels,
+        test_size=0.30,
+        random_state=42,
+        exclude_negative=True  # Exclude contaminated samples (-1)
+    )
+    
+    print(f"\n✓ Nutrient dataset ready:")
+    print(f"  Training:    {X_train_nut.shape[0]} samples ({X_train_nut.shape[1]} features)")
+    print(f"  Testing:    {X_test_nut.shape[0]} samples ({X_test_nut.shape[1]} features)")
+    
+    # --- OBJECTIVE 2: CONTAMINANT DETECTION (Clean/Contaminated) ---
+    print("\n" + "-"*70)
+    print("OBJECTIVE 2: CONTAMINANT DETECTION (Clean/Contaminated)")
+    print("-"*70)
+    
+    X_train_con, X_test_con, y_train_con, y_test_con = stratified_split_with_labels(
+        spectra=results['normalized'],
+        labels=contaminant_labels,
+        test_size=0.30,
+        random_state=42,
+        exclude_negative=False  # Use all samples
+    )
+    
+    print(f"\n✓ Contaminant dataset ready:")
+    print(f"  Training:    {X_train_con.shape[0]} samples ({X_train_con.shape[1]} features)")
+    print(f"  Testing:    {X_test_con.shape[0]} samples ({X_test_con.shape[1]} features)")
+    
+    # =========================================================================
+    # STEP 5: QUALITY VALIDATION
+    # =========================================================================
+    print("\n" + "="*70)
+    print("STEP 5: PREPROCESSING QUALITY VALIDATION")
+    print("="*70)
+    
     metrics = validate_preprocessing_quality(
         raw=results['raw'][0],
         processed=results['normalized'][0],
@@ -1218,52 +1287,130 @@ if __name__ == "__main__":
         sample_idx=0
     )
     
-    # -------------------------------------------------------------------------
-    # STEP 4: Visualization
-    # -------------------------------------------------------------------------
-    print("\nGenerating visualizations...")
+    # =========================================================================
+    # STEP 6: VISUALIZATION
+    # =========================================================================
+    print("\n" + "="*70)
+    print("STEP 6: VISUALIZATION")
+    print("="*70)
     
-    # Plot preprocessing stages (wavelengths now extracted from results dict)
+    # Plot preprocessing stages for first sample
     plot_preprocessing_stages(
         results,
         sample_idx=0,
-        save_path='preprocessing_stages_sample0.png'  # Changed from Clay1
+        save_path='preprocessing_stages_Clay1.png'
     )
     
     # Plot comparison of first 10 samples
     plot_sample_comparison(
         results['normalized'],
         sample_names,
-        wavelengths,  # Still pass separately here (function signature unchanged)
+        wavelengths,
         n_samples=10,
-        save_path='sample_comparison.png'
+        save_path='sample_comparison_10samples.png'
     )
     
-    # -------------------------------------------------------------------------
-    # STEP 5: Save Preprocessed Data
-    # -------------------------------------------------------------------------
-    save_preprocessed_data(results, output_path="irish_soil_preprocessed.npz")
-    
-    # -------------------------------------------------------------------------
-    # NEXT STEPS
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # STEP 7: SAVE PREPROCESSED DATA + LABELS + SPLITS
+    # =========================================================================
     print("\n" + "="*70)
-    print("NEXT STEPS")
+    print("STEP 7: SAVING PREPROCESSED DATA & SPLITS")
     print("="*70)
-    print("\n1. OBTAIN CLASSIFICATION LABELS:")
-    print("   Create 'label_map.csv' with format:")
-    print("   sample,label")
-    print("   Clay_1,High")
-    print("   Clay_2,Medium")
-    print("   ...")
-    print("\n2. PROCEED TO PHASE 2: Feature Selection")
-    print("   - NIST peak identification (N:  742. 4, 744.2, 746.8 nm)")
-    print("   - ANOVA F-test:  12,981 → ~500 features")
-    print("   - RF Gini Importance: 500 → ~100 features")
-    print("\n3. PHASE 3: Model Training (Random Forest)")
-    print("   - Target: ≥85% accuracy (vs 73. 01% PLS-DA baseline)")
-    print("   - TinyML deployment:  ≤128 KB, ≤50 ms, ≤5 mW")
-    print("\n4. Contact SETU, Ireland collaborators for:")
-    print("   - NPK concentration measurements (ground truth)")
-    print("   - Classification thresholds (High/Medium/Low)")
+    
+    # Save complete preprocessed dataset with labels
+    save_dict = {
+        # Preprocessing stages
+        'raw': results['raw'],
+        'baseline_corrected': results['baseline_corrected'],
+        'smoothed': results['smoothed'],
+        'normalized': results['normalized'],
+        
+        # Metadata
+        'sample_names': sample_names,
+        'wavelengths': wavelengths,
+        
+        # Labels
+        'nutrient_labels':  nutrient_labels,
+        'contaminant_labels': contaminant_labels,
+        
+        # OBJECTIVE 1: Nutrient Classification Splits
+        'X_train_nutrient': X_train_nut,
+        'X_test_nutrient': X_test_nut,
+        'y_train_nutrient': y_train_nut,
+        'y_test_nutrient': y_test_nut,
+        
+        # OBJECTIVE 2: Contaminant Detection Splits
+        'X_train_contaminant':  X_train_con,
+        'X_test_contaminant': X_test_con,
+        'y_train_contaminant': y_train_con,
+        'y_test_contaminant': y_test_con,
+    }
+    
+    output_file = "irish_soil_preprocessed_phase1.npz"
+    np.savez_compressed(output_file, **save_dict)
+    
+    file_size_mb = os.path.getsize(output_file) / 1024 / 1024
+    
+    print(f"\n✓ All data saved to:  {output_file}")
+    print(f"  File size: {file_size_mb:.2f} MB")
+    print(f"\n  Contents:")
+    print(f"    • Preprocessing stages:   raw, baseline_corrected, smoothed, normalized")
+    print(f"    • Metadata:             sample_names, wavelengths")
+    print(f"    • Labels:               nutrient_labels, contaminant_labels")
+    print(f"    • Nutrient splits:      X_train/test_nutrient, y_train/test_nutrient")
+    print(f"    • Contaminant splits:   X_train/test_contaminant, y_train/test_contaminant")
+    
+    # =========================================================================
+    # PHASE 1 COMPLETION SUMMARY
+    # =========================================================================
+    print("\n" + "="*70)
+    print("✓ PHASE 1 COMPLETE:  DATA PREPROCESSING & PREPARATION")
+    print("="*70)
+    
+    print("\nDataset Summary:")
+    print(f"  Total samples:         320")
+    print(f"  Total features:       12,981 wavelengths (197.001-973.5891 nm)")
+    print(f"  Preprocessing:         Poly(5) → SG(7,2) → L2-Norm")
+    
+    print("\nObjective 1: Nutrient Classification (High/Med/Low)")
+    print(f"  Usable samples:       {len(y_train_nut) + len(y_test_nut)}")
+    print(f"  Training set:         {len(y_train_nut)} samples (70%)")
+    print(f"  Testing set:          {len(y_test_nut)} samples (30%)")
+    print(f"  Target accuracy:      ≥85%")
+    
+    print("\nObjective 2: Contaminant Detection (Clean/Contaminated)")
+    print(f"  Total samples:        {len(y_train_con) + len(y_test_con)}")
+    print(f"  Training set:          {len(y_train_con)} samples (70%)")
+    print(f"  Testing set:          {len(y_test_con)} samples (30%)")
+    print(f"  Target accuracy:      ≥90%")
+    
+    print("\n" + "="*70)
+    print("NEXT PHASE: FEATURE SELECTION")
+    print("="*70)
+    print("\nPhase 2 Objectives:")
+    print("  1. NIST Peak Identification:")
+    print("     - Nitrogen (N):   742.4, 744.2, 746.8 nm")
+    print("     - Phosphorus (P): 253.5, 255.3 nm")
+    print("     - Potassium (K):  766.5, 769.9 nm")
+    print("     - Heavy Metals:   Pb, Cd, Cr characteristic lines")
+    
+    print("\n  2.Statistical Feature Selection:")
+    print("     - ANOVA F-test:    12,981 → ~500 features")
+    print("     - Random Forest:   500 → ~100 features (Gini importance)")
+    
+    print("\n  3.Load preprocessed data:")
+    print(f"     data = np.load('{output_file}')")
+    print(f"     X_train = data['X_train_nutrient']")
+    print(f"     y_train = data['y_train_nutrient']")
+    
+    print("\n  4.Expected outcome:")
+    print("     - Feature reduction: 99.2% (12,981 → ~100)")
+    print("     - Accuracy improvement: +12-20 pp over baseline (73.01%)")
+    print("="*70)
+    
+    print("\n✓ Preprocessing pipeline validated and ready for Phase 2")
+    print(f"✓ Generated files:")
+    print(f"    • {output_file}")
+    print(f"    • preprocessing_stages_Clay1.png")
+    print(f"    • sample_comparison_10samples.png")
     print("="*70)

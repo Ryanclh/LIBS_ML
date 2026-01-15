@@ -84,7 +84,6 @@ def asls_baseline(spectrum: np.ndarray, lam: float = 1e6, p: float = 0.01,
     
     return z
 
-
 def airpls_baseline(spectrum: np.ndarray, lam: float = 1e6, 
                     max_iter: int = 15) -> np.ndarray:
     """
@@ -130,7 +129,6 @@ def airpls_baseline(spectrum: np.ndarray, lam: float = 1e6,
     
     return z
 
-
 def snip_baseline(spectrum: np.ndarray, iterations: int = 50) -> np.ndarray:
     """
     Statistics-sensitive Non-linear Iterative Peak-clipping (SNIP).
@@ -163,7 +161,6 @@ def snip_baseline(spectrum: np.ndarray, iterations: int = 50) -> np.ndarray:
     # Transform back
     baseline = (np.exp(np.exp(spectrum_log) - 1) - 1) ** 2 - 1
     return np.maximum(baseline, 0)
-
 
 def polynomial_baseline(spectrum: np.ndarray, degree: int = 5) -> np.ndarray:
     """
@@ -241,7 +238,6 @@ def calculate_edge_stability(corrected:  np.ndarray,
     
     return left_std, right_std, ratio
 
-
 def morphological_baseline(spectrum: np.ndarray, window: int = 50) -> np.ndarray:
     """
     Morphological opening for baseline estimation.
@@ -263,7 +259,6 @@ def morphological_baseline(spectrum: np.ndarray, window: int = 50) -> np.ndarray
     # Morphological opening = erosion followed by dilation
     baseline = grey_opening(spectrum, size=window)
     return baseline
-
 
 def rolling_ball_baseline(spectrum: np.ndarray, radius: int = 50) -> np.ndarray:
     """
@@ -292,7 +287,6 @@ def rolling_ball_baseline(spectrum: np.ndarray, radius: int = 50) -> np.ndarray:
     
     return baseline
 
-
 def median_baseline(spectrum: np.ndarray, window: int = 101) -> np.ndarray:
     """
     Median filter baseline (simple alternative).
@@ -315,8 +309,6 @@ def median_baseline(spectrum: np.ndarray, window: int = 101) -> np.ndarray:
         window += 1
     baseline = median_filter(spectrum, size=window, mode='nearest')
     return baseline
-
-# Around line 190, add synthetic spectrum generation and recovery test functions:
 
 def generate_synthetic_ground_truth(
     base_spectrum: np.ndarray,
@@ -377,7 +369,6 @@ def generate_synthetic_ground_truth(
     
     return synthetic, peak_height, peak_index
 
-
 def calculate_peak_recovery_rate(
     corrected_spectrum: np.ndarray,
     true_peak_height: float,
@@ -419,7 +410,6 @@ def calculate_peak_recovery_rate(
     recovery_rate = (measured_height / true_peak_height) * 100.0
     
     return recovery_rate
-
 
 def test_synthetic_ground_truth(
     baseline_func,
@@ -507,7 +497,6 @@ def calculate_baseline_flatness(corrected:  np.ndarray,
     """
     return np.std(corrected[baseline_region])
 
-
 def calculate_peak_preservation(original: np.ndarray, 
                                corrected: np.ndarray) -> float:
     """
@@ -521,7 +510,6 @@ def calculate_peak_preservation(original: np.ndarray,
     
     correlation = np.corrcoef(orig_norm, corr_norm)[0, 1]
     return correlation
-
 
 def calculate_peak_distortion(original: np. ndarray, corrected: np.ndarray) -> float:
     """
@@ -550,7 +538,6 @@ def calculate_peak_distortion(original: np. ndarray, corrected: np.ndarray) -> f
     distortion = np.abs((heights_corr - heights_orig) / (heights_orig + 1e-10)) * 100
     return np.mean(distortion)
 
-
 def calculate_residual_quality(spectrum: np.ndarray, baseline: np.ndarray) -> float:
     """
     Calculate standard deviation of residual. 
@@ -559,7 +546,6 @@ def calculate_residual_quality(spectrum: np.ndarray, baseline: np.ndarray) -> fl
     """
     residual = spectrum - baseline
     return np.std(residual)
-
 
 # ============================================================================
 # COMPREHENSIVE COMPARISON
@@ -820,7 +806,6 @@ def compare_baseline_methods(
             print()
     
     return results
-
 
 def generate_recommendation(results: Dict[str, BaselineMetrics]) -> Tuple[str, str]:
     """
@@ -1718,7 +1703,6 @@ def plot_baseline_comparison(
     
     plt.show()
 
-
 def print_results_table(results: Dict[str, BaselineMetrics]) -> None:
     """Print formatted results table with peak recovery."""
     try:
@@ -1871,7 +1855,6 @@ def save_recommendation_report(
         f.write("5. Proceed with full preprocessing pipeline\n\n")
     
     print(f"\n✓ Recommendation report saved to: {filepath}")
-
 
 # ============================================================================
 # MAIN EXECUTION
