@@ -1,65 +1,53 @@
 """
-Phase 2: Systematic Feature Selection for LIBS Spectral Data
-=============================================================
-Goal:  Reduce 12,981 features to <100 for TinyML deployment
+Feature Selection Comparative Analysis
+======================================
+Systematic comparison of ANOVA, RFE, and Random Forest Gini Importance
+for LIBS spectroscopic feature selection under TinyML constraints.
 
-Three Methods (Research Gap Focus):
-1.Filter-Based:     ANOVA F-test (statistical variance)
-2.Embedded:        Random Forest Gini Importance (tree-based)
-3.Domain-Knowledge: NIST atomic spectral lines (physics-based)
-
-Target Performance: 
-- Nutrient Classification: ≥85% accuracy
-- Contaminant Detection: ≥90% accuracy
-- Feature Reduction: 12,981 → <100 (>99.2% reduction)
+Author: clh-um
+Date: 2026-01-15
+FYP:  Embedded Machine Learning for On-Device LIBS-Based Soil Nutrient Estimation
 """
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.feature_selection import (
+    SelectKBest, f_classif, RFE, RFECV
+)
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import cross_val_score, StratifiedKFold
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from typing import Dict, Tuple, List
+from sklearn.model_selection import (
+    StratifiedKFold, cross_val_score, train_test_split
+)
+from sklearn.preprocessing import normalize, LabelEncoder
+from sklearn.metrics import (
+    accuracy_score, classification_report, confusion_matrix
+)
+from scipy.stats import ttest_rel
+import time
 import warnings
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
+import sys
 import os
+
 warnings.filterwarnings('ignore')
 
+# Add preprocessing module path
+sys.path.append(os.path.dirname(__file__))
 
-# ============================================================================
-# NIST ATOMIC SPECTRAL LINES DATABASE (Domain Knowledge)
-# ============================================================================
-
-NIST_PEAKS = {
-    # NUTRIENT ELEMENTS (NPK)
-    'Nitrogen':  {
-        'primary': [742.364, 744.229, 746.831],      # N I (neutral)
-        'secondary': [821.634, 824.238, 868.028]     # N I
-    },
-    'Phosphorus': {
-        'primary': [253.565, 255.328],               # P I (in your range!)
-        'secondary': [213.618, 214.914]              # Below 197 nm - not captured
-    },
-    'Potassium': {
-        'primary': [766.491, 769.896],               # K I (resonance doublet)
-        'secondary': [404.414, 404.721]              # K I
-    },
-    
-    # HEAVY METAL CONTAMINANTS
-    'Lead': {
-        'primary': [405.781, 283.306, 220.353],      # Pb I & Pb II
-        'secondary': [261.418, 368.346, 280.199]     # Pb I
-    },
-    'Cadmium': {
-        'primary':  [228.802, 326.106, 361.051],      # Cd I & Cd II
-        'secondary':  [467.815, 508.582, 643.847]     # Cd I
-    },
-    'Chromium':  {
-        'primary': [425.435, 427.480, 520.602],      # Cr I & Cr II
-        'secondary': [267.716, 283.563, 357.869]     # Cr I & Cr II
-    }
+# NIST Atomic Emission Lines (nm) for Physical Validation
+NIST_LINES = {
+    'N': [746.8312, 744.2294, 868.0279, 821.6337, 862.9245],
+    'P': [253.5603, 255.3282, 214.9144, 213.6180],
+    'K': [766.4899, 769.8965, 404.7214, 404.4141],
+    'Fe': [259.9397, 358.1195, 344.0606, 373.4867],  # Matrix element
+    'Ca': [393.3663, 396.8469, 422.6728],  # Matrix element
+    'Mg': [285.2127, 279.5528, 383.2307],  # Matrix element
+    'Pb': [405.7806, 283.3053, 368.3462],  # Contaminant
+    'Cd': [228.8018, 226.5021, 214.4392],  # Contaminant
+    'Cr': [267.7161, 283.5629, 357.8687]   # Contaminant
 }
 
 
@@ -67,793 +55,915 @@ NIST_PEAKS = {
 # DATA LOADING
 # ============================================================================
 
-def load_phase1_data(filepath: str = "irish_soil_preprocessed_phase1.npz") -> Dict: 
+def load_preprocessed_data(
+    filepath: str,
+    labels_file: str = 'irish_soil_labels.csv'
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Load preprocessed data from Phase 1.
+    Load preprocessed LIBS spectra and labels.
     
     Returns
     -------
-    data :  dict
-        Contains X_train, X_test, y_train, y_test for both objectives
+    X : np.ndarray, shape (n_samples, n_features)
+        Preprocessed spectra (Polynomial + SG + L2-Norm)
+    y_nutrient : np.ndarray
+        Nutrient labels (0=Low, 1=Medium, 2=High)
+    y_contaminant : np.ndarray
+        Contaminant labels (0=Clean, 1=Contaminated)
+    wavelengths : np.ndarray
+        Wavelength values (nm)
     """
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(
-            f"Phase 1 data not found:  {filepath}\n"
-            f"Please run libs_preprocessing.py first to generate preprocessed data."
-        )
-    
     print(f"\n{'='*70}")
-    print("LOADING PHASE 1 PREPROCESSED DATA")
-    print(f"{'='*70}")
-    print(f"File: {filepath}")
-    
-    data_raw = np.load(filepath, allow_pickle=True)
-    
-    data = {
-        # Metadata
-        'wavelengths': data_raw['wavelengths'],
-        'sample_names': data_raw['sample_names'],
-        
-        # Nutrient Classification (Objective 1)
-        'X_train_nutrient': data_raw['X_train_nutrient'],
-        'X_test_nutrient': data_raw['X_test_nutrient'],
-        'y_train_nutrient': data_raw['y_train_nutrient'],
-        'y_test_nutrient': data_raw['y_test_nutrient'],
-        
-        # Contaminant Detection (Objective 2)
-        'X_train_contaminant': data_raw['X_train_contaminant'],
-        'X_test_contaminant': data_raw['X_test_contaminant'],
-        'y_train_contaminant':  data_raw['y_train_contaminant'],
-        'y_test_contaminant': data_raw['y_test_contaminant'],
-    }
-    
-    print(f"\n✓ Data loaded successfully")
-    print(f"  Wavelength range: {data['wavelengths'][0]:.3f} - {data['wavelengths'][-1]:.3f} nm")
-    print(f"  Total features:    {len(data['wavelengths'])}")
-    print(f"\n  Nutrient dataset:")
-    print(f"    Train: {data['X_train_nutrient'].shape}")
-    print(f"    Test:   {data['X_test_nutrient'].shape}")
-    print(f"  Contaminant dataset:")
-    print(f"    Train: {data['X_train_contaminant'].shape}")
-    print(f"    Test:  {data['X_test_contaminant'].shape}")
+    print("LOADING PREPROCESSED DATA")
     print(f"{'='*70}")
     
-    return data
+    # Check file extension
+    if filepath.endswith('.npz'):
+        # Load from NumPy compressed format (Phase 1 output)
+        print(f"  Loading from .npz file: {filepath}")
+        
+        # Load with allow_pickle=True for object arrays (sample names)
+        data = np.load(filepath, allow_pickle=True)
+        
+        # Debug: Print available keys
+        print(f"  Available keys in .npz file: {list(data.files)}")
+        
+        # Based on your file structure, use 'normalized' key
+        if 'normalized' in data.files:
+            X = data['normalized']
+            print(f"  ✓ Loaded normalized spectra (Polynomial + SG + L2)")
+        elif 'smoothed' in data.files:
+            X = data['smoothed']
+            print(f"  ✓ Loaded smoothed spectra (Polynomial + SG)")
+            # Apply L2 normalization
+            from sklearn.preprocessing import normalize
+            X = normalize(X, norm='l2', axis=1)
+            print(f"  → Applied L2 normalization")
+        elif 'baseline_corrected' in data.files:
+            X = data['baseline_corrected']
+            print(f"  ✓ Loaded baseline-corrected spectra")
+            # Apply SG filter + L2 normalization
+            X = apply_savgol_filter(X, window=15, order=3)
+            from sklearn.preprocessing import normalize
+            X = normalize(X, norm='l2', axis=1)
+            print(f"  → Applied SG filter + L2 normalization")
+        else:
+            raise KeyError(f"Could not find spectra data. Available keys: {list(data.files)}")
+        
+        # Get wavelengths (check multiple possible keys)
+        wavelength_keys = ['wavelengths', 'wavelength', 'wl', 'lambda']
+        wavelengths = None
+        
+        for key in wavelength_keys:
+            if key in data.files:
+                wavelengths = data[key]
+                print(f"  ✓ Found wavelengths under key: '{key}'")
+                break
+        
+        if wavelengths is None:
+            # If no wavelengths found, create synthetic ones based on shape
+            print(f"  ⚠ Warning: No wavelengths found, creating synthetic range")
+            wavelengths = np.linspace(200, 900, X.shape[1])
+        
+        # Get sample names (check multiple possible keys)
+        sample_name_keys = ['sample_names', 'samples', 'sample_ids']
+        sample_names = None
+        
+        for key in sample_name_keys:
+            if key in data.files:
+                try:
+                    sample_names = data[key]
+                    # Handle different encoding formats
+                    if len(sample_names) > 0:
+                        if isinstance(sample_names[0], bytes):
+                            sample_names = np.array([s.decode('utf-8') for s in sample_names])
+                        elif isinstance(sample_names[0], np.bytes_):
+                            sample_names = np.array([s.decode('utf-8') for s in sample_names])
+                    print(f"  ✓ Found sample names under key: '{key}'")
+                    break
+                except Exception as e:
+                    print(f"  ⚠ Warning: Could not load sample names from '{key}': {e}")
+                    sample_names = None
+        
+        print(f"\n✓ Loaded spectra: {X.shape[0]} samples × {X.shape[1]} features")
+        print(f"  Wavelength range: {wavelengths[0]:.2f} - {wavelengths[-1]:.2f} nm")
+        
+    elif filepath.endswith('.csv'):
+        # Load from CSV (raw data - needs preprocessing)
+        print(f"  Loading from .csv file: {filepath}")
+        df_spectra = pd.read_csv(filepath, index_col=0)
+        
+        # Check if wavelengths are in rows or columns
+        if len(df_spectra.index) > len(df_spectra.columns):
+            print("  → Wavelengths in rows, transposing...")
+            df_spectra = df_spectra.T
+        
+        wavelengths = df_spectra.columns.astype(float).values
+        sample_names = df_spectra.index.values
+        X_raw = df_spectra.values
+        
+        print(f"✓ Loaded spectra: {X_raw.shape[0]} samples × {X_raw.shape[1]} features")
+        print(f"  Wavelength range: {wavelengths[0]:.2f} - {wavelengths[-1]:.2f} nm")
+        
+        # Apply preprocessing pipeline (Section 4.1 finalized)
+        print("\n[Preprocessing Pipeline]")
+        print("  Step 1: Polynomial 5th-order baseline correction...")
+        X_baseline = apply_polynomial_baseline(X_raw)
+        
+        print("  Step 2: Savitzky-Golay filter (w=15, o=3)...")
+        X_filtered = apply_savgol_filter(X_baseline, window=15, order=3)
+        
+        print("  Step 3: L2-Normalization...")
+        from sklearn.preprocessing import normalize
+        X = normalize(X_filtered, norm='l2', axis=1)
+        print("✓ Preprocessing complete")
+    
+    else:
+        raise ValueError(f"Unsupported file format: {filepath}. Use .npz or .csv")
+    
+    # Load labels from CSV
+    if not os.path.isabs(labels_file):
+        # Try relative to data file first
+        labels_path = os.path.join(os.path.dirname(filepath), labels_file)
+        if not os.path.exists(labels_path):
+            # Try parent directory
+            labels_path = os.path.join(os.path.dirname(os.path.dirname(filepath)), labels_file)
+    else:
+        labels_path = labels_file
+    
+    if not os.path.exists(labels_path):
+        raise FileNotFoundError(f"Labels file not found at: {labels_path}")
+    
+    print(f"\n  Loading labels from: {labels_path}")
+    df_labels = pd.read_csv(labels_path)
+    
+    # Create label mapping
+    label_map = dict(zip(df_labels['Sample_Name'], 
+                         zip(df_labels['Nutrient_Label'], 
+                             df_labels['Contaminant_Label'])))
+    
+    # Match labels to samples
+    if sample_names is None:
+        # If no sample names, assume labels match by index
+        print("  ⚠ Warning: No sample names found, matching labels by index")
+        y_nutrient = df_labels['Nutrient_Label'].values[:X.shape[0]]
+        y_contaminant = df_labels['Contaminant_Label'].values[:X.shape[0]]
+    else:
+        y_nutrient = []
+        y_contaminant = []
+        
+        for name in sample_names:
+            # Handle any remaining byte string conversions
+            if isinstance(name, (bytes, np.bytes_)):
+                name = name.decode('utf-8')
+            
+            if name in label_map:
+                nut, cont = label_map[name]
+                y_nutrient.append(nut)
+                y_contaminant.append(cont)
+            else:
+                y_nutrient.append(-1)
+                y_contaminant.append(-1)
+        
+        y_nutrient = np.array(y_nutrient)
+        y_contaminant = np.array(y_contaminant)
+    
+    print(f"\n✓ Labels loaded:")
+    print(f"  Nutrient (valid): {np.sum(y_nutrient >= 0)} samples")
+    print(f"  Nutrient distribution: Low={np.sum(y_nutrient==0)}, Med={np.sum(y_nutrient==1)}, High={np.sum(y_nutrient==2)}")
+    print(f"  Contaminant: Clean={np.sum(y_contaminant==0)}, Contaminated={np.sum(y_contaminant==1)}")
+    print(f"{'='*70}\n")
+    
+    return X, y_nutrient, y_contaminant, wavelengths
+
+def apply_polynomial_baseline(spectra: np.ndarray, order: int = 5) -> np.ndarray:
+    """Polynomial baseline correction (Section 4.1.1)."""
+    corrected = np.zeros_like(spectra)
+    for i in range(spectra.shape[0]):
+        x = np.arange(len(spectra[i]))
+        coeffs = np.polyfit(x, spectra[i], order)
+        baseline = np.polyval(coeffs, x)
+        corrected[i] = np.maximum(spectra[i] - baseline, 0)
+    return corrected
+
+
+def apply_savgol_filter(spectra: np.ndarray, window: int = 15, 
+                       order: int = 3) -> np.ndarray:
+    """Savitzky-Golay filter (Section 4.1.2)."""
+    from scipy.signal import savgol_filter
+    if window % 2 == 0:
+        window += 1
+    return np.apply_along_axis(
+        lambda x: savgol_filter(x, window, order), axis=1, arr=spectra
+    )
+
+def apply_polynomial_baseline(spectra: np.ndarray, order: int = 5) -> np.ndarray:
+    """Polynomial baseline correction (Section 4.1.1)."""
+    corrected = np.zeros_like(spectra)
+    for i in range(spectra.shape[0]):
+        x = np.arange(len(spectra[i]))
+        coeffs = np.polyfit(x, spectra[i], order)
+        baseline = np.polyval(coeffs, x)
+        corrected[i] = np.maximum(spectra[i] - baseline, 0)
+    return corrected
+
+
+def apply_savgol_filter(spectra: np.ndarray, window: int = 15, 
+                       order: int = 3) -> np.ndarray:
+    """Savitzky-Golay filter (Section 4.1.2)."""
+    from scipy.signal import savgol_filter
+    if window % 2 == 0:
+        window += 1
+    return np.apply_along_axis(
+        lambda x: savgol_filter(x, window, order), axis=1, arr=spectra
+    )
 
 
 # ============================================================================
-# METHOD 1: ANOVA F-TEST (FILTER-BASED)
+# FEATURE SELECTION METHODS
 # ============================================================================
 
-def feature_selection_anova(
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    X_test: np.ndarray,
+@dataclass
+class FeatureSelectionResult:
+    """Container for feature selection results."""
+    method_name: str
+    selected_features: np.ndarray  # Indices
+    selected_wavelengths: np.ndarray  # Wavelength values (nm)
+    training_time: float  # seconds
+    memory_footprint: int  # bytes
+    accuracy: float
+    n_features: int
+    feature_importances: np.ndarray = None  # Optional
+
+
+def select_features_anova(
+    X: np.ndarray,
+    y:  np.ndarray,
     wavelengths: np.ndarray,
-    k:  int = 100
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[int]]:
+    n_features: int = 87,
+    verbose: bool = True
+) -> FeatureSelectionResult:
     """
-    ANOVA F-test feature selection.
+    ANOVA F-test feature selection (Filter-based).
     
-    Justification: [264] +10% accuracy improvement for multiclass
-    
-    Parameters
-    ----------
-    X_train, y_train : Training data
-    X_test :  Test data
-    wavelengths :  Wavelength values for selected features
-    k : Number of top features to select
-    
-    Returns
-    -------
-    X_train_selected, X_test_selected :  Selected feature subsets
-    selected_wavelengths :  Wavelengths of selected features
-    selected_indices : Indices of selected features
+    Reference: Univariate statistical test, fast screening.
     """
-    print(f"\n{'='*70}")
-    print("METHOD 1: ANOVA F-TEST (Filter-Based Statistical)")
-    print(f"{'='*70}")
-    print(f"Goal: Select top {k} features with highest variance between classes")
-    print(f"Justification: [264] - Improved accuracy by >10% for multiclass")
+    if verbose:
+        print(f"\n{'='*70}")
+        print("METHOD 1: ANOVA F-TEST (Filter-Based)")
+        print(f"{'='*70}")
+        print(f"Target features: {n_features}")
     
-    # Apply ANOVA F-test
-    selector = SelectKBest(score_func=f_classif, k=k)
-    X_train_selected = selector.fit_transform(X_train, y_train)
-    X_test_selected = selector.transform(X_test)
+    start_time = time.time()
     
-    # Get selected feature indices
+    # ANOVA F-test scoring
+    selector = SelectKBest(score_func=f_classif, k=n_features)
+    selector.fit(X, y)
+    
     selected_indices = selector.get_support(indices=True)
     selected_wavelengths = wavelengths[selected_indices]
     
-    # Get F-scores for ranking
-    f_scores = selector.scores_[selected_indices]
-    
-    print(f"\n✓ Feature selection complete")
-    print(f"  Original features:   {X_train.shape[1]}")
-    print(f"  Selected features:  {X_train_selected.shape[1]}")
-    print(f"  Reduction:           {(1 - k/X_train.shape[1])*100:.2f}%")
-    print(f"\n  Top 5 wavelengths by F-score:")
-    top_5_idx = np.argsort(f_scores)[-5:][::-1]
-    for i, idx in enumerate(top_5_idx, 1):
-        print(f"    {i}.{selected_wavelengths[idx]:.3f} nm (F={f_scores[idx]:.2f})")
-    
-    return X_train_selected, X_test_selected, selected_wavelengths, selected_indices.tolist()
-
-
-# ============================================================================
-# METHOD 2: RANDOM FOREST GINI IMPORTANCE (EMBEDDED)
-# ============================================================================
-
-def feature_selection_random_forest(
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    X_test: np.ndarray,
-    wavelengths: np.ndarray,
-    k: int = 100,
-    n_estimators: int = 100,
-    max_depth: int = 8
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[int]]:
-    """
-    Random Forest Gini Importance feature selection.
-    
-    Justification: [266] - Outperforms univariate tests on spectral data (409 citations)
-    "Spectral regions deemed unimportant by ANOVA may be HIGH importance by Gini"
-    
-    Parameters
-    ----------
-    X_train, y_train : Training data
-    X_test : Test data
-    wavelengths : Wavelength values
-    k : Number of top features to select
-    n_estimators :  Number of trees in forest
-    max_depth : Maximum tree depth (for TinyML constraint)
-    
-    Returns
-    -------
-    X_train_selected, X_test_selected :  Selected feature subsets
-    selected_wavelengths : Wavelengths of selected features
-    selected_indices : Indices of selected features
-    """
-    print(f"\n{'='*70}")
-    print("METHOD 2: RANDOM FOREST GINI IMPORTANCE (Embedded Tree-Based)")
-    print(f"{'='*70}")
-    print(f"Goal: Select top {k} features most useful for RF decision trees")
-    print(f"Justification: [266] - Outperforms ANOVA on spectral data (409 citations)")
-    print(f"Configuration: {n_estimators} trees, max_depth={max_depth}")
-    
-    # Train Random Forest
+    # Evaluate accuracy
+    X_selected = X[: , selected_indices]
     rf = RandomForestClassifier(
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        random_state=42,
-        n_jobs=-1
+        n_estimators=100, max_depth=10, random_state=42, n_jobs=-1
     )
-    rf.fit(X_train, y_train)
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    cv_scores = cross_val_score(rf, X_selected, y, cv=cv, scoring='accuracy')
+    accuracy = np.mean(cv_scores)
     
-    # Get feature importances
-    importances = rf.feature_importances_
+    training_time = time.time() - start_time
     
-    # Select top k features
-    selected_indices = np.argsort(importances)[-k:][::-1]
+    # Memory footprint:  just indices
+    memory_footprint = n_features * 4  # 4 bytes per int32 index
+    
+    if verbose: 
+        print(f"  Training time: {training_time:.3f} seconds")
+        print(f"  Selected features: {len(selected_indices)}")
+        print(f"  5-Fold CV Accuracy: {accuracy*100:.2f}%")
+        print(f"  Memory footprint: {memory_footprint} bytes ({memory_footprint/1024:.2f} KB)")
+    
+    return FeatureSelectionResult(
+        method_name='ANOVA F-test',
+        selected_features=selected_indices,
+        selected_wavelengths=selected_wavelengths,
+        training_time=training_time,
+        memory_footprint=memory_footprint,
+        accuracy=accuracy,
+        n_features=len(selected_indices),
+        feature_importances=selector.scores_[selected_indices]
+    )
+
+
+def select_features_rfe(
+    X: np.ndarray,
+    y: np.ndarray,
+    wavelengths: np.ndarray,
+    n_features: int = 87,
+    verbose: bool = True
+) -> FeatureSelectionResult: 
+    """
+    Recursive Feature Elimination with Cross-Validation (Wrapper-based).
+    
+    Reference: Iterative backward elimination, model-aware.
+    """
+    if verbose:
+        print(f"\n{'='*70}")
+        print("METHOD 2: RFE WITH CROSS-VALIDATION (Wrapper-Based)")
+        print(f"{'='*70}")
+        print(f"Target features: {n_features}")
+    
+    start_time = time.time()
+    
+    # Use Linear SVM as estimator (faster than RF for RFE)
+    from sklearn.svm import SVC
+    estimator = SVC(kernel='linear', random_state=42)
+    
+    # RFE with target number of features
+    selector = RFE(estimator=estimator, n_features_to_select=n_features, step=100)
+    selector.fit(X, y)
+    
+    selected_indices = np.where(selector.support_)[0]
     selected_wavelengths = wavelengths[selected_indices]
     
-    X_train_selected = X_train[:, selected_indices]
-    X_test_selected = X_test[:, selected_indices]
-    
-    print(f"\n✓ Feature selection complete")
-    print(f"  Original features:  {X_train.shape[1]}")
-    print(f"  Selected features:  {X_train_selected.shape[1]}")
-    print(f"  Reduction:          {(1 - k/X_train.shape[1])*100:.2f}%")
-    print(f"\n  Top 5 wavelengths by Gini Importance:")
-    for i in range(5):
-        idx = selected_indices[i]
-        print(f"    {i+1}.{wavelengths[idx]:.3f} nm (Importance={importances[idx]:.4f})")
-    
-    return X_train_selected, X_test_selected, selected_wavelengths, selected_indices.tolist()
-
-
-# ============================================================================
-# METHOD 3: NIST DOMAIN KNOWLEDGE (HYBRID)
-# ============================================================================
-
-def find_nist_peak_indices(
-    wavelengths: np.ndarray,
-    target_elements: List[str],
-    window_nm: float = 0.5
-) -> Tuple[List[int], Dict]: 
-    """
-    Identify feature indices corresponding to NIST atomic spectral lines.
-    
-    Parameters
-    ----------
-    wavelengths : np.ndarray
-        Array of wavelength values
-    target_elements : List[str]
-        Elements to search for (e.g., ['Nitrogen', 'Phosphorus', 'Potassium'])
-    window_nm : float
-        Search window (±0.5 nm tolerance)
-    
-    Returns
-    -------
-    selected_indices : List[int]
-        Feature indices near NIST peaks
-    peak_info : Dict
-        Mapping of elements → detected peaks
-    """
-    selected_indices = []
-    peak_info = {}
-    
-    for element in target_elements:
-        if element not in NIST_PEAKS:
-            print(f"  ⚠️  {element} not in NIST database, skipping")
-            continue
-        
-        element_peaks = []
-        all_peaks = NIST_PEAKS[element]['primary'] + NIST_PEAKS[element].get('secondary', [])
-        
-        for peak_nm in all_peaks:
-            # Find indices within ±window_nm
-            mask = np.abs(wavelengths - peak_nm) <= window_nm
-            indices = np.where(mask)[0]
-            
-            if len(indices) > 0:
-                # Select index closest to theoretical peak
-                closest_idx = indices[np.argmin(np.abs(wavelengths[indices] - peak_nm))]
-                selected_indices.append(closest_idx)
-                element_peaks.append({
-                    'theoretical':  peak_nm,
-                    'actual': wavelengths[closest_idx],
-                    'index': closest_idx,
-                    'deviation': wavelengths[closest_idx] - peak_nm
-                })
-        
-        peak_info[element] = element_peaks
-    
-    # Remove duplicates
-    selected_indices = sorted(list(set(selected_indices)))
-    
-    return selected_indices, peak_info
-
-
-def feature_selection_nist(
-    X_train: np.ndarray,
-    y_train:  np.ndarray,
-    X_test: np.ndarray,
-    wavelengths: np.ndarray,
-    objective:  str = 'nutrient'
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[int], Dict]:
-    """
-    NIST domain knowledge feature selection.
-    
-    Justification: Physics-based peak selection from NIST Atomic Spectra Database
-    
-    Parameters
-    ----------
-    X_train, y_train : Training data
-    X_test : Test data
-    wavelengths :  Wavelength values
-    objective : 'nutrient' or 'contaminant'
-    
-    Returns
-    -------
-    X_train_selected, X_test_selected : Selected feature subsets
-    selected_wavelengths : Wavelengths of selected features
-    selected_indices : Indices of selected features
-    peak_info :  Detected peak information
-    """
-    print(f"\n{'='*70}")
-    print("METHOD 3: NIST DOMAIN KNOWLEDGE (Hybrid Physics-Based)")
-    print(f"{'='*70}")
-    print(f"Objective: {objective.upper()}")
-    print(f"Method: Select features within ±0.5nm of NIST atomic spectral lines")
-    
-    # Select target elements based on objective
-    if objective == 'nutrient':
-        target_elements = ['Nitrogen', 'Phosphorus', 'Potassium']
-        print(f"Target elements: N, P, K (macronutrients)")
-    elif objective == 'contaminant': 
-        target_elements = ['Lead', 'Cadmium', 'Chromium']
-        print(f"Target elements:  Pb, Cd, Cr (heavy metals)")
-    else:
-        raise ValueError(f"Unknown objective: {objective}")
-    
-    # Find NIST peak indices
-    selected_indices, peak_info = find_nist_peak_indices(
-        wavelengths, 
-        target_elements, 
-        window_nm=0.5
+    # Evaluate with RF (final classifier)
+    X_selected = X[:, selected_indices]
+    rf = RandomForestClassifier(
+        n_estimators=100, max_depth=10, random_state=42, n_jobs=-1
     )
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    cv_scores = cross_val_score(rf, X_selected, y, cv=cv, scoring='accuracy')
+    accuracy = np.mean(cv_scores)
     
-    if len(selected_indices) == 0:
-        raise ValueError("No NIST peaks found in wavelength range!")
+    training_time = time.time() - start_time
+    memory_footprint = n_features * 4
     
-    # Extract features
-    selected_wavelengths = wavelengths[selected_indices]
-    X_train_selected = X_train[:, selected_indices]
-    X_test_selected = X_test[:, selected_indices]
+    if verbose:
+        print(f"  Training time:  {training_time:.3f} seconds")
+        print(f"  Selected features: {len(selected_indices)}")
+        print(f"  5-Fold CV Accuracy: {accuracy*100:.2f}%")
+        print(f"  Memory footprint:  {memory_footprint} bytes ({memory_footprint/1024:.2f} KB)")
     
-    print(f"\n✓ Feature selection complete")
-    print(f"  Original features:  {X_train.shape[1]}")
-    print(f"  Selected features:  {X_train_selected.shape[1]}")
-    print(f"  Reduction:          {(1 - len(selected_indices)/X_train.shape[1])*100:.2f}%")
-    
-    print(f"\n  Detected NIST Peaks by Element:")
-    for element, peaks in peak_info.items():
-        print(f"\n    {element}:  {len(peaks)} peaks detected")
-        for i, peak in enumerate(peaks[: 3], 1):  # Show first 3
-            print(f"      {i}.{peak['actual']:.3f} nm (theory: {peak['theoretical']:.3f} nm, Δ={peak['deviation']:+.3f} nm)")
-        if len(peaks) > 3:
-            print(f"      ... and {len(peaks)-3} more")
-    
-    return X_train_selected, X_test_selected, selected_wavelengths, selected_indices, peak_info
+    return FeatureSelectionResult(
+        method_name='RFE-CV',
+        selected_features=selected_indices,
+        selected_wavelengths=selected_wavelengths,
+        training_time=training_time,
+        memory_footprint=memory_footprint,
+        accuracy=accuracy,
+        n_features=len(selected_indices),
+        feature_importances=selector.ranking_[selected_indices]
+    )
 
 
-# ============================================================================
-# EVALUATION & COMPARISON
-# ============================================================================
-
-def evaluate_feature_subset(
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    X_test: np.ndarray,
-    y_test: np.ndarray,
-    method_name: str,
-    n_features: int,
-    cv_folds: int = 5
-) -> Dict:
+def select_features_rf_gini(
+    X:  np.ndarray,
+    y: np.ndarray,
+    wavelengths: np.ndarray,
+    n_features: int = 87,
+    verbose:  bool = True
+) -> FeatureSelectionResult:
     """
-    Evaluate feature subset with Random Forest classifier.
+    Random Forest Gini Importance (Embedded method).
     
-    Parameters
-    ----------
-    X_train, y_train : Training data
-    X_test, y_test : Test data
-    method_name : Name of feature selection method
-    n_features :  Number of selected features
-    cv_folds :  Number of cross-validation folds
-    
-    Returns
-    -------
-    results : Dict
-        Contains accuracy, CV score, classification report
+    Reference: Section 4.3 - Captures non-linear interactions,
+    NIST-aligned features (N: 746.8nm, P:253.5nm, K:766.5nm).
     """
-    print(f"\n  Evaluating {method_name} ({n_features} features)...")
+    if verbose:
+        print(f"\n{'='*70}")
+        print("METHOD 3: RANDOM FOREST GINI IMPORTANCE (Embedded)")
+        print(f"{'='*70}")
+        print(f"Target features: {n_features}")
     
-    # Train Random Forest (TinyML configuration from [302])
+    start_time = time.time()
+    
+    # Train RF for feature importance
     rf = RandomForestClassifier(
         n_estimators=100,
-        max_depth=8,
+        max_depth=None,  # No depth limit for feature importance estimation
         random_state=42,
         n_jobs=-1
     )
+    rf.fit(X, y)
     
-    # Cross-validation on training set
-    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
-    cv_scores = cross_val_score(rf, X_train, y_train, cv=cv, scoring='accuracy')
+    # Get Gini importances
+    importances = rf.feature_importances_
+    selected_indices = np.argsort(importances)[-n_features:][::-1]
+    selected_wavelengths = wavelengths[selected_indices]
     
-    # Train on full training set
-    rf.fit(X_train, y_train)
+    # Evaluate with depth-limited RF (deployment configuration)
+    X_selected = X[:, selected_indices]
+    rf_eval = RandomForestClassifier(
+        n_estimators=100, max_depth=10, random_state=42, n_jobs=-1
+    )
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    cv_scores = cross_val_score(rf_eval, X_selected, y, cv=cv, scoring='accuracy')
+    accuracy = np.mean(cv_scores)
     
-    # Evaluate on test set
-    y_pred = rf.predict(X_test)
-    test_accuracy = accuracy_score(y_test, y_pred)
+    training_time = time.time() - start_time
+    memory_footprint = n_features * 4
     
-    results = {
-        'method': method_name,
-        'n_features': n_features,
-        'cv_mean':  np.mean(cv_scores),
-        'cv_std': np.std(cv_scores),
-        'test_accuracy': test_accuracy,
-        'y_pred': y_pred,
-        'model':  rf
-    }
+    if verbose:
+        print(f"  Training time: {training_time:.3f} seconds")
+        print(f"  Selected features: {len(selected_indices)}")
+        print(f"  5-Fold CV Accuracy: {accuracy*100:.2f}%")
+        print(f"  Memory footprint: {memory_footprint} bytes ({memory_footprint/1024:.2f} KB)")
     
-    print(f"    CV Accuracy:    {results['cv_mean']*100:.2f}% (±{results['cv_std']*100:.2f}%)")
-    print(f"    Test Accuracy:  {results['test_accuracy']*100:.2f}%")
-    
-    return results
+    return FeatureSelectionResult(
+        method_name='RF Gini',
+        selected_features=selected_indices,
+        selected_wavelengths=selected_wavelengths,
+        training_time=training_time,
+        memory_footprint=memory_footprint,
+        accuracy=accuracy,
+        n_features=len(selected_indices),
+        feature_importances=importances[selected_indices]
+    )
 
 
-def compare_all_methods(
-    data: Dict,
-    objective: str = 'nutrient',
-    k_features: int = 100
-) -> Dict:
+# ============================================================================
+# NIST PHYSICAL VALIDATION
+# ============================================================================
+
+def validate_nist_alignment(
+    selected_wavelengths: np.ndarray,
+    tolerance: float = 0.5,
+    task: str = 'nutrient'
+) -> Dict: 
     """
-    Run all three feature selection methods and compare performance.
+    Validate selected features against NIST atomic emission lines.
     
     Parameters
     ----------
-    data : Dict
-        Loaded Phase 1 data
-    objective :  str
-        'nutrient' or 'contaminant'
-    k_features :  int
-        Number of features to select (for ANOVA and RF methods)
+    selected_wavelengths : np.ndarray
+        Wavelengths selected by feature selection method
+    tolerance : float
+        Matching tolerance in nm (default ±0.5 nm)
+    task : str
+        'nutrient' (N/P/K focus) or 'contaminant' (Pb/Cd/Cr focus)
     
     Returns
     -------
-    comparison : Dict
-        Results for all three methods
+    dict
+        Validation metrics and matched lines
+    """
+    if task == 'nutrient': 
+        target_elements = ['N', 'P', 'K', 'Fe', 'Ca', 'Mg']
+    else: 
+        target_elements = ['Pb', 'Cd', 'Cr', 'Fe']
+    
+    matched_lines = []
+    total_nist_lines = 0
+    
+    for element in target_elements:
+        if element not in NIST_LINES:
+            continue
+        
+        nist_lines = NIST_LINES[element]
+        total_nist_lines += len(nist_lines)
+        
+        for nist_wl in nist_lines: 
+            # Check if any selected wavelength is within tolerance
+            matches = np.abs(selected_wavelengths - nist_wl) < tolerance
+            if np.any(matches):
+                matched_wl = selected_wavelengths[matches][0]
+                matched_lines.append({
+                    'element': element,
+                    'nist_wavelength': nist_wl,
+                    'matched_wavelength': matched_wl,
+                    'difference': abs(matched_wl - nist_wl)
+                })
+    
+    n_matched = len(matched_lines)
+    match_percentage = (n_matched / total_nist_lines) * 100 if total_nist_lines > 0 else 0
+    
+    return {
+        'n_matched': n_matched,
+        'total_nist_lines': total_nist_lines,
+        'match_percentage': match_percentage,
+        'matched_lines': matched_lines,
+        'n_selected': len(selected_wavelengths)
+    }
+
+
+# ============================================================================
+# COMPARATIVE ANALYSIS
+# ============================================================================
+
+def compare_feature_selection_methods(
+    X: np.ndarray,
+    y: np.ndarray,
+    wavelengths: np.ndarray,
+    n_features:  int = 87,
+    task: str = 'nutrient'
+) -> Dict:
+    """
+    Comprehensive comparison of all three feature selection methods.
+    
+    Returns
+    -------
+    dict
+        Comparison results with scoring
     """
     print(f"\n{'='*70}")
-    print(f"COMPARING ALL FEATURE SELECTION METHODS")
+    print(f"FEATURE SELECTION COMPARATIVE ANALYSIS")
+    print(f"Task: {task.upper()}")
+    print(f"Target Features: {n_features}")
     print(f"{'='*70}")
-    print(f"Objective: {objective.upper()}")
-    print(f"Target features: {k_features} (ANOVA & RF), variable (NIST)")
-    print(f"Baseline: Full spectrum ({data['wavelengths'].shape[0]} features)")
     
-    # Select appropriate dataset
-    if objective == 'nutrient':
-        X_train = data['X_train_nutrient']
-        X_test = data['X_test_nutrient']
-        y_train = data['y_train_nutrient']
-        y_test = data['y_test_nutrient']
-    elif objective == 'contaminant':
-        X_train = data['X_train_contaminant']
-        X_test = data['X_test_contaminant']
-        y_train = data['y_train_contaminant']
-        y_test = data['y_test_contaminant']
-    else:
-        raise ValueError(f"Unknown objective:  {objective}")
+    # Run all three methods
+    anova_result = select_features_anova(X, y, wavelengths, n_features)
+    rfe_result = select_features_rfe(X, y, wavelengths, n_features)
+    rf_gini_result = select_features_rf_gini(X, y, wavelengths, n_features)
     
-    wavelengths = data['wavelengths']
-    comparison = {}
+    results = {
+        'ANOVA': anova_result,
+        'RFE': rfe_result,
+        'RF Gini': rf_gini_result
+    }
     
-    # === BASELINE: Full Spectrum ===
+    # NIST Validation
     print(f"\n{'='*70}")
-    print("BASELINE: Full Spectrum (No Feature Selection)")
+    print("NIST PHYSICAL VALIDATION")
     print(f"{'='*70}")
-    comparison['baseline'] = evaluate_feature_subset(
-        X_train, y_train, X_test, y_test,
-        method_name='Baseline (Full)',
-        n_features=X_train.shape[1]
-    )
-    comparison['baseline']['selected_wavelengths'] = wavelengths
-    comparison['baseline']['selected_indices'] = list(range(len(wavelengths)))
     
-    # === METHOD 1: ANOVA F-TEST ===
-    X_train_anova, X_test_anova, wl_anova, idx_anova = feature_selection_anova(
-        X_train, y_train, X_test, wavelengths, k=k_features
-    )
-    comparison['anova'] = evaluate_feature_subset(
-        X_train_anova, y_train, X_test_anova, y_test,
-        method_name='ANOVA F-test',
-        n_features=k_features
-    )
-    comparison['anova']['selected_wavelengths'] = wl_anova
-    comparison['anova']['selected_indices'] = idx_anova
+    nist_validations = {}
+    for method_name, result in results.items():
+        nist_val = validate_nist_alignment(
+            result.selected_wavelengths, 
+            tolerance=0.5, 
+            task=task
+        )
+        nist_validations[method_name] = nist_val
+        
+        print(f"\n{method_name}:")
+        print(f"  Matched NIST lines: {nist_val['n_matched']}/{nist_val['total_nist_lines']}")
+        print(f"  Match percentage: {nist_val['match_percentage']:.1f}%")
     
-    # === METHOD 2: RANDOM FOREST GINI ===
-    X_train_rf, X_test_rf, wl_rf, idx_rf = feature_selection_random_forest(
-        X_train, y_train, X_test, wavelengths, k=k_features
-    )
-    comparison['rf_gini'] = evaluate_feature_subset(
-        X_train_rf, y_train, X_test_rf, y_test,
-        method_name='RF Gini Importance',
-        n_features=k_features
-    )
-    comparison['rf_gini']['selected_wavelengths'] = wl_rf
-    comparison['rf_gini']['selected_indices'] = idx_rf
-    
-    # === METHOD 3: NIST DOMAIN KNOWLEDGE ===
-    X_train_nist, X_test_nist, wl_nist, idx_nist, peak_info = feature_selection_nist(
-        X_train, y_train, X_test, wavelengths, objective=objective
-    )
-    comparison['nist'] = evaluate_feature_subset(
-        X_train_nist, y_train, X_test_nist, y_test,
-        method_name='NIST Domain Knowledge',
-        n_features=len(idx_nist)
-    )
-    comparison['nist']['selected_wavelengths'] = wl_nist
-    comparison['nist']['selected_indices'] = idx_nist
-    comparison['nist']['peak_info'] = peak_info
-    
-    # === SUMMARY TABLE ===
+    # Weighted Scoring (Section 4.3.4)
     print(f"\n{'='*70}")
-    print("COMPARISON SUMMARY")
+    print("WEIGHTED SCORING SYSTEM")
     print(f"{'='*70}")
+    print("Weights: Accuracy 40%, Feature Count 30%, Efficiency 15%, Interpretability 15%")
     
-    summary_data = []
-    for method_key in ['baseline', 'anova', 'rf_gini', 'nist']:
-        r = comparison[method_key]
-        summary_data.append({
-            'Method': r['method'],
-            'Features': r['n_features'],
-            'Reduction (%)': f"{(1 - r['n_features']/X_train.shape[1])*100:.2f}",
-            'CV Accuracy': f"{r['cv_mean']*100:.2f}% (±{r['cv_std']*100:.2f}%)",
-            'Test Accuracy': f"{r['test_accuracy']*100:.2f}%"
-        })
+    scores = calculate_weighted_scores(results, nist_validations)
     
-    df_summary = pd.DataFrame(summary_data)
-    print(df_summary.to_string(index=False))
-    
-    # Find best method
-    best_method_key = max(comparison.keys(), key=lambda k: comparison[k]['test_accuracy'])
-    best_method = comparison[best_method_key]
-    
+    # Print final ranking
     print(f"\n{'='*70}")
-    print(f"🏆 BEST METHOD: {best_method['method']}")
+    print("FINAL RANKING")
     print(f"{'='*70}")
-    print(f"  Test Accuracy:     {best_method['test_accuracy']*100:.2f}%")
-    print(f"  Features:         {best_method['n_features']}")
-    print(f"  Feature Reduction: {(1 - best_method['n_features']/X_train.shape[1])*100:.2f}%")
+    sorted_methods = sorted(scores.items(), key=lambda x: x[1]['total_score'], reverse=True)
     
-    comparison['summary_table'] = df_summary
-    comparison['best_method'] = best_method_key
+    for rank, (method, score_dict) in enumerate(sorted_methods, 1):
+        print(f"\n{rank}.{method}")
+        print(f"   Total Score: {score_dict['total_score']:.2f}/100")
+        print(f"   - Accuracy:         {score_dict['accuracy_score']:.2f}/40")
+        print(f"   - Feature Count:   {score_dict['feature_score']:.2f}/30")
+        print(f"   - Efficiency:      {score_dict['efficiency_score']:.2f}/15")
+        print(f"   - Interpretability: {score_dict['interpretability_score']:.2f}/15")
     
-    return comparison
+    return {
+        'results': results,
+        'nist_validations': nist_validations,
+        'scores': scores,
+        'recommended':  sorted_methods[0][0]
+    }
+
+
+def calculate_weighted_scores(
+    results: Dict[str, FeatureSelectionResult],
+    nist_validations: Dict[str, Dict]
+) -> Dict: 
+    """
+    Calculate weighted scores for feature selection methods.
+    
+    Scoring Criteria:
+    - Accuracy:  40% (higher is better)
+    - Feature Count: 30% (fewer is better, but target is 87)
+    - Computational Efficiency: 15% (faster is better)
+    - Interpretability (NIST alignment): 15% (higher is better)
+    """
+    scores = {}
+    
+    # Extract metrics
+    accuracies = {name: res.accuracy for name, res in results.items()}
+    training_times = {name: res.training_time for name, res in results.items()}
+    nist_matches = {name: val['match_percentage'] for name, val in nist_validations.items()}
+    
+    # Normalize metrics (0-100 scale)
+    max_acc = max(accuracies.values())
+    min_acc = min(accuracies.values())
+    
+    max_time = max(training_times.values())
+    min_time = min(training_times.values())
+    
+    max_nist = max(nist_matches.values())
+    
+    for method_name, result in results.items():
+        # 1.Accuracy Score (40 points max)
+        acc_normalized = (result.accuracy - min_acc) / (max_acc - min_acc) if max_acc > min_acc else 1.0
+        accuracy_score = acc_normalized * 40
+        
+        # 2.Feature Count Score (30 points max)
+        # Penalize deviation from target (87 features)
+        target_features = 87
+        feature_deviation = abs(result.n_features - target_features) / target_features
+        feature_score = max(0, (1 - feature_deviation)) * 30
+        
+        # 3.Computational Efficiency Score (15 points max)
+        # Lower time is better
+        time_normalized = 1 - ((result.training_time - min_time) / (max_time - min_time)) if max_time > min_time else 1.0
+        efficiency_score = time_normalized * 15
+        
+        # 4.Interpretability Score (15 points max)
+        # Based on NIST alignment percentage
+        nist_pct = nist_validations[method_name]['match_percentage']
+        interpretability_score = (nist_pct / max_nist) * 15 if max_nist > 0 else 0
+        
+        total_score = accuracy_score + feature_score + efficiency_score + interpretability_score
+        
+        scores[method_name] = {
+            'accuracy_score': accuracy_score,
+            'feature_score': feature_score,
+            'efficiency_score': efficiency_score,
+            'interpretability_score': interpretability_score,
+            'total_score': total_score
+        }
+    
+    return scores
 
 
 # ============================================================================
-# VISUALIZATION
+# VISUALIZATION & REPORTING
 # ============================================================================
 
-def plot_feature_comparison(
-    comparison: Dict,
-    objective: str,
-    wavelengths: np.ndarray,
-    save_path: str = None
+def plot_comparison_dashboard(
+    comparison_results: Dict,
+    save_path: str = 'feature_selection_comparison.png'
 ):
     """
-    Visualize feature selection results.
+    Generate comprehensive comparison dashboard.
     """
+    results = comparison_results['results']
+    nist_vals = comparison_results['nist_validations']
+    scores = comparison_results['scores']
+    
     fig = plt.figure(figsize=(16, 12))
     
     # Plot 1: Accuracy Comparison
-    ax1 = fig.add_subplot(2, 2, 1)
-    methods = []
-    accuracies = []
-    colors = []
+    ax1 = fig.add_subplot(2, 3, 1)
+    methods = list(results.keys())
+    accuracies = [results[m].accuracy * 100 for m in methods]
+    colors = ['green' if m == comparison_results['recommended'] else 'steelblue' 
+              for m in methods]
     
-    for key in ['baseline', 'anova', 'rf_gini', 'nist']:
-        r = comparison[key]
-        methods.append(r['method'])
-        accuracies.append(r['test_accuracy'] * 100)
-        colors.append('green' if key == comparison['best_method'] else 'skyblue')
-    
-    bars = ax1.bar(methods, accuracies, color=colors, edgecolor='black', linewidth=1.5)
-    ax1.set_ylabel('Test Accuracy (%)', fontsize=12, fontweight='bold')
-    ax1.set_title('Feature Selection Method Comparison', fontsize=14, fontweight='bold')
-    ax1.grid(axis='y', alpha=0.3)
-    ax1.set_ylim([0, 100])
-    
-    # Add value labels
+    bars = ax1.bar(methods, accuracies, color=colors, edgecolor='black', linewidth=2)
     for bar, acc in zip(bars, accuracies):
-        height = bar.get_height()
-        ax1.text(bar.get_x() + bar.get_width()/2., height,
-                f'{acc:.2f}%',
-                ha='center', va='bottom', fontsize=11, fontweight='bold')
+        ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                f'{acc:.2f}%', ha='center', fontweight='bold')
     
-    # Rotate x labels
-    ax1.set_xticklabels(methods, rotation=15, ha='right')
+    ax1.set_ylabel('5-Fold CV Accuracy (%)', fontsize=11)
+    ax1.set_title('Classification Accuracy Comparison', fontsize=12, fontweight='bold')
+    ax1.set_ylim([min(accuracies)*0.95, max(accuracies)*1.05])
+    ax1.grid(axis='y', alpha=0.3)
     
-    # Plot 2: Feature Count vs Accuracy
-    ax2 = fig.add_subplot(2, 2, 2)
-    n_features = [comparison[k]['n_features'] for k in ['baseline', 'anova', 'rf_gini', 'nist']]
+    # Plot 2: NIST Alignment
+    ax2 = fig.add_subplot(2, 3, 2)
+    nist_percentages = [nist_vals[m]['match_percentage'] for m in methods]
     
-    ax2.scatter(n_features, accuracies, c=colors, s=200, edgecolor='black', linewidth=2, alpha=0.7)
+    bars = ax2.bar(methods, nist_percentages, color=colors, edgecolor='black', linewidth=2)
+    for bar, pct in zip(bars, nist_percentages):
+        ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                f'{pct:.1f}%', ha='center', fontweight='bold')
     
-    for i, method in enumerate(methods):
-        ax2.annotate(method, (n_features[i], accuracies[i]),
-                    xytext=(10, 5), textcoords='offset points',
-                    fontsize=9, bbox=dict(boxstyle='round,pad=0.3', facecolor='wheat', alpha=0.5))
+    ax2.set_ylabel('NIST Line Match (%)', fontsize=11)
+    ax2.set_title('Physical Validation (NIST Alignment)', fontsize=12, fontweight='bold')
+    ax2.set_ylim([0, max(nist_percentages)*1.2])
+    ax2.grid(axis='y', alpha=0.3)
     
-    ax2.set_xlabel('Number of Features', fontsize=12, fontweight='bold')
-    ax2.set_ylabel('Test Accuracy (%)', fontsize=12, fontweight='bold')
-    ax2.set_title('Feature Count vs Accuracy Trade-off', fontsize=14, fontweight='bold')
-    ax2.grid(alpha=0.3)
-    ax2.set_xscale('log')
+    # Plot 3: Training Time
+    ax3 = fig.add_subplot(2, 3, 3)
+    times = [results[m].training_time for m in methods]
     
-    # Plot 3: Selected Wavelength Distribution
-    ax3 = fig.add_subplot(2, 2, 3)
+    bars = ax3.bar(methods, times, color=colors, edgecolor='black', linewidth=2)
+    for bar, t in zip(bars, times):
+        ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1,
+                f'{t:.2f}s', ha='center', fontweight='bold')
     
-    # Plot full spectrum as background
-    ax3.axhspan(0, 1, alpha=0.1, color='gray', label='Full Spectrum')
+    ax3.set_ylabel('Training Time (seconds)', fontsize=11)
+    ax3.set_title('Computational Efficiency', fontsize=12, fontweight='bold')
+    ax3.grid(axis='y', alpha=0.3)
     
-    # Mark selected features for each method
-    y_positions = {'anova': 0.75, 'rf_gini':  0.5, 'nist': 0.25}
-    colors_map = {'anova': 'blue', 'rf_gini':  'red', 'nist': 'green'}
+    # Plot 4: Weighted Scores Breakdown
+    ax4 = fig.add_subplot(2, 3, 4)
+    score_categories = ['Accuracy\n(40%)', 'Features\n(30%)', 'Efficiency\n(15%)', 'Interpret.\n(15%)']
+    x = np.arange(len(methods))
+    width = 0.2
     
-    for key, y_pos in y_positions.items():
-        wl_selected = comparison[key]['selected_wavelengths']
-        ax3.scatter(wl_selected, [y_pos]*len(wl_selected), 
-                   c=colors_map[key], s=20, alpha=0.6, label=comparison[key]['method'])
+    for i, category in enumerate(['accuracy_score', 'feature_score', 'efficiency_score', 'interpretability_score']):
+        values = [scores[m][category] for m in methods]
+        ax4.bar(x + i*width, values, width, label=score_categories[i])
     
-    ax3.set_xlabel('Wavelength (nm)', fontsize=12, fontweight='bold')
-    ax3.set_ylabel('Method', fontsize=12, fontweight='bold')
-    ax3.set_title('Selected Wavelength Distribution', fontsize=14, fontweight='bold')
-    ax3.set_yticks(list(y_positions.values()))
-    ax3.set_yticklabels([comparison[k]['method'] for k in y_positions.keys()])
-    ax3.legend(loc='upper right')
-    ax3.grid(alpha=0.3, axis='x')
+    ax4.set_xticks(x + width * 1.5)
+    ax4.set_xticklabels(methods)
+    ax4.set_ylabel('Score', fontsize=11)
+    ax4.set_title('Weighted Score Breakdown', fontsize=12, fontweight='bold')
+    ax4.legend(fontsize=9)
+    ax4.grid(axis='y', alpha=0.3)
     
-    # Plot 4: Confusion Matrix for Best Method
-    ax4 = fig.add_subplot(2, 2, 4)
-    best_key = comparison['best_method']
-    best_result = comparison[best_key]
+    # Plot 5: Total Score Comparison
+    ax5 = fig.add_subplot(2, 3, 5)
+    total_scores = [scores[m]['total_score'] for m in methods]
     
-    cm = confusion_matrix(comparison['baseline']['y_pred'][:len(best_result['y_pred'])], 
-                         best_result['y_pred'])
+    bars = ax5.barh(methods, total_scores, color=colors, edgecolor='black', linewidth=2)
+    for bar, score in zip(bars, total_scores):
+        ax5.text(score + 1, bar.get_y() + bar.get_height()/2,
+                f'{score:.1f}/100', va='center', fontweight='bold')
     
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax4, cbar=True)
-    ax4.set_xlabel('Predicted', fontsize=12, fontweight='bold')
-    ax4.set_ylabel('Actual', fontsize=12, fontweight='bold')
-    ax4.set_title(f'Confusion Matrix - {best_result["method"]}', fontsize=14, fontweight='bold')
+    ax5.set_xlabel('Total Weighted Score (0-100)', fontsize=11)
+    ax5.set_title(f'Final Ranking (Recommended: {comparison_results["recommended"]})', 
+                  fontsize=12, fontweight='bold')
+    ax5.set_xlim([0, 105])
+    ax5.grid(axis='x', alpha=0.3)
     
-    plt.suptitle(f'Phase 2:  Feature Selection Results ({objective.upper()})',
-                fontsize=16, fontweight='bold', y=0.995)
-    plt.tight_layout(rect=[0, 0, 1, 0.99])
+    # Plot 6: Memory Footprint
+    ax6 = fig.add_subplot(2, 3, 6)
+    memories = [results[m].memory_footprint / 1024 for m in methods]  # Convert to KB
     
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"\n✓ Visualization saved:  {save_path}")
+    bars = ax6.bar(methods, memories, color=colors, edgecolor='black', linewidth=2)
+    for bar, mem in zip(bars, memories):
+        ax6.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                f'{mem:.2f} KB', ha='center', fontweight='bold')
     
+    ax6.set_ylabel('Memory Footprint (KB)', fontsize=11)
+    ax6.set_title('TinyML Deployment Feasibility', fontsize=12, fontweight='bold')
+    ax6.axhline(y=1.0, color='red', linestyle='--', alpha=0.5, label='Target <1 KB')
+    ax6.legend(fontsize=9)
+    ax6.grid(axis='y', alpha=0.3)
+    
+    plt.suptitle('Feature Selection Method Comprehensive Comparison\nScoring:  Accuracy 40%, Feature Count 30%, Efficiency 15%, Interpretability 15%',
+                 fontsize=14, fontweight='bold', y=0.98)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    print(f"\n✓ Dashboard saved:  {save_path}")
     plt.show()
 
 
-# ============================================================================
-# SAVE RESULTS
-# ============================================================================
-
-def save_feature_selection_results(
-    comparison: Dict,
-    objective: str,
-    output_path: str = "feature_selection_results.npz"
+def generate_comparison_report(
+    comparison_results: Dict,
+    task: str,
+    output_file: str = 'feature_selection_report.txt'
 ):
-    """
-    Save feature selection results for Phase 3.
-    """
-    best_key = comparison['best_method']
-    best_result = comparison[best_key]
-    
-    save_dict = {
-        'objective': objective,
-        'best_method': best_key,
-        'best_method_name': best_result['method'],
-        'selected_indices': np.array(best_result['selected_indices']),
-        'selected_wavelengths': best_result['selected_wavelengths'],
-        'n_features': best_result['n_features'],
-        'test_accuracy': best_result['test_accuracy'],
-        'cv_mean': best_result['cv_mean'],
-        'cv_std': best_result['cv_std'],
+    """Generate comprehensive text report for thesis."""
+    # Add encoding='utf-8' to handle Unicode characters
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write("="*70 + "\n")
+        f.write("FEATURE SELECTION COMPARATIVE ANALYSIS REPORT\n")
+        f.write(f"Task: {task.upper()}\n")
+        f.write("="*70 + "\n\n")
         
-        # Save all method results for comparison
-        'all_methods': {
-            k: {
-                'n_features': v['n_features'],
-                'test_accuracy':  v['test_accuracy'],
-                'cv_mean': v['cv_mean'],
-                'selected_indices': v['selected_indices']
-            }
-            for k, v in comparison.items() if k not in ['summary_table', 'best_method']
-        }
-    }
+        results = comparison_results['results']
+        nist_vals = comparison_results['nist_validations']
+        scores = comparison_results['scores']
+        recommended = comparison_results['recommended']
+        
+        # Section 1: Performance Summary
+        f.write("SECTION 1: CLASSIFICATION PERFORMANCE\n")
+        f.write("-"*70 + "\n\n")
+        f.write(f"{'Method':<15} {'Accuracy':<12} {'Features':<10} {'Time (s)':<12} {'Memory (KB)':<12}\n")
+        f.write("-"*70 + "\n")
+        
+        for method_name, result in results.items():
+            f.write(f"{method_name:<15} {result.accuracy*100:6.2f}%     "
+                   f"{result.n_features:<10} {result.training_time:8.3f}    "
+                   f"{result.memory_footprint/1024:8.3f}\n")
+        
+        # Section 2: NIST Validation
+        f.write("\n\nSECTION 2: NIST PHYSICAL VALIDATION\n")
+        f.write("-"*70 + "\n\n")
+        
+        for method_name, nist_val in nist_vals.items():
+            f.write(f"{method_name}:\n")
+            f.write(f"  Total NIST lines checked: {nist_val['total_nist_lines']}\n")
+            f.write(f"  Matched lines: {nist_val['n_matched']}\n")
+            f.write(f"  Match percentage: {nist_val['match_percentage']:.1f}%\n")
+            f.write(f"  Top matched lines:\n")
+            
+            for match in nist_val['matched_lines'][:5]:
+                # Use ASCII arrow instead of Unicode arrow
+                f.write(f"    {match['element']} {match['nist_wavelength']:.2f} nm -> "
+                       f"{match['matched_wavelength']:.2f} nm (Delta={match['difference']:.3f} nm)\n")
+            f.write("\n")
+        
+        # Section 3: Weighted Scoring
+        f.write("\nSECTION 3: WEIGHTED SCORING ANALYSIS\n")
+        f.write("-"*70 + "\n")
+        f.write("Weights: Accuracy 40%, Feature Count 30%, Efficiency 15%, Interpretability 15%\n\n")
+        
+        f.write(f"{'Method':<15} {'Accuracy':<12} {'Features':<12} {'Efficiency':<12} {'Interpret.':<12} {'TOTAL':<12}\n")
+        f.write("-"*70 + "\n")
+        
+        for method_name, score_dict in sorted(scores.items(), key=lambda x: x[1]['total_score'], reverse=True):
+            f.write(f"{method_name:<15} {score_dict['accuracy_score']:6.2f}/40   "
+                   f"{score_dict['feature_score']:6.2f}/30   "
+                   f"{score_dict['efficiency_score']:6.2f}/15   "
+                   f"{score_dict['interpretability_score']:6.2f}/15   "
+                   f"{score_dict['total_score']:6.2f}/100\n")
+        
+        # Section 4: Recommendation
+        f.write("\n\n" + "="*70 + "\n")
+        f.write("RECOMMENDATION\n")
+        f.write("="*70 + "\n\n")
+        f.write(f"SELECTED METHOD: {recommended}\n\n")
+        
+        best_result = results[recommended]
+        best_score = scores[recommended]
+        best_nist = nist_vals[recommended]
+        
+        f.write("JUSTIFICATION:\n")
+        f.write(f"  1. Highest total score: {best_score['total_score']:.2f}/100\n")
+        f.write(f"  2. Classification accuracy: {best_result.accuracy*100:.2f}%\n")
+        f.write(f"  3. NIST alignment: {best_nist['match_percentage']:.1f}% (physical validation)\n")
+        f.write(f"  4. Training time: {best_result.training_time:.3f} seconds\n")
+        f.write(f"  5. Memory footprint: {best_result.memory_footprint/1024:.3f} KB (TinyML compatible)\n")
+        
+        f.write("\n" + "="*70 + "\n")
     
-    # Add NIST peak info if available
-    if best_key == 'nist':
-        save_dict['nist_peak_info'] = best_result.get('peak_info', {})
-    
-    np.savez_compressed(output_path, **save_dict)
-    
-    print(f"\n{'='*70}")
-    print("FEATURE SELECTION RESULTS SAVED")
-    print(f"{'='*70}")
-    print(f"File: {output_path}")
-    print(f"Size: {os.path.getsize(output_path) / 1024:.2f} KB")
-    print(f"\nContents:")
-    print(f"  • Best method:          {best_result['method']}")
-    print(f"  • Selected features:   {best_result['n_features']}")
-    print(f"  • Test accuracy:       {best_result['test_accuracy']*100:.2f}%")
-    print(f"  • Selected indices:    Array of {len(best_result['selected_indices'])} indices")
-    print(f"  • Selected wavelengths: {best_result['selected_wavelengths'][0]:.3f} - {best_result['selected_wavelengths'][-1]:.3f} nm")
-    print(f"\n✓ Ready for Phase 3: Model Development")
-    print(f"{'='*70}")
-
-
+    print(f"✓ Report saved: {output_file}")
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
 
-if __name__ == "__main__":
+if __name__ == "__main__": 
     print("="*70)
-    print("PHASE 2: SYSTEMATIC FEATURE SELECTION")
-    print("Goal: Reduce 12,981 features to <100 for TinyML deployment")
+    print("FEATURE SELECTION COMPARATIVE ANALYSIS")
+    print("Section 4.3: RF Gini vs ANOVA vs RFE")
     print("="*70)
     
-    # =========================================================================
-    # STEP 1: LOAD PHASE 1 DATA
-    # =========================================================================
-    data = load_phase1_data(r"D:\Ryan\UM\Academic\Y4S1\KIE4002 FINAL YEAR PROJECT\Project\P1_Preprocessing\irish_soil_preprocessed_phase1.npz")
+    # Configuration
+    DATA_PATH = r"D:\Ryan\UM\Academic\Y4S1\KIE4002 FINAL YEAR PROJECT\Project\P1_Preprocessing\irish_soil_preprocessed.npz"
+    LABELS_PATH = r"D:\Ryan\UM\Academic\Y4S1\KIE4002 FINAL YEAR PROJECT\Project\irish_soil_labels.csv"
+    N_FEATURES = 87  # Target feature count
     
-    # =========================================================================
-    # STEP 2: FEATURE SELECTION FOR NUTRIENT CLASSIFICATION
-    # =========================================================================
-    print(f"\n{'='*70}")
-    print("OBJECTIVE 1: NUTRIENT CLASSIFICATION (NPK)")
-    print(f"{'='*70}")
-    print("Target: ≥85% accuracy, <100 features")
-    
-    comparison_nutrient = compare_all_methods(
-        data,
-        objective='nutrient',
-        k_features=100
+    # Load data
+    X, y_nutrient, y_contaminant, wavelengths = load_preprocessed_data(
+        DATA_PATH, LABELS_PATH
     )
     
-    # Visualize
-    plot_feature_comparison(
+    # Nutrient Classification (Task A)
+    print("\n" + "="*70)
+    print("TASK A: NUTRIENT CLASSIFICATION (N/P/K)")
+    print("="*70)
+    
+    # Filter valid nutrient samples
+    valid_nutrient = y_nutrient >= 0
+    X_nutrient = X[valid_nutrient]
+    y_nut = y_nutrient[valid_nutrient]
+    
+    comparison_nutrient = compare_feature_selection_methods(
+        X_nutrient, y_nut, wavelengths, n_features=N_FEATURES, task='nutrient'
+    )
+    
+    # Generate outputs
+    plot_comparison_dashboard(
         comparison_nutrient,
-        objective='nutrient',
-        wavelengths=data['wavelengths'],
-        save_path='feature_selection_nutrient.png'
+        save_path='feature_selection_comparison_nutrient.png'
     )
     
-    # Save results
-    save_feature_selection_results(
+    generate_comparison_report(
         comparison_nutrient,
-        objective='nutrient',
-        output_path='feature_selection_nutrient.npz'
+        task='nutrient',
+        output_file='feature_selection_report_nutrient.txt'
     )
     
-    # =========================================================================
-    # STEP 3: FEATURE SELECTION FOR CONTAMINANT DETECTION
-    # =========================================================================
-    print(f"\n{'='*70}")
-    print("OBJECTIVE 2: CONTAMINANT DETECTION")
-    print(f"{'='*70}")
-    print("Target: ≥90% accuracy, <100 features")
+    # Contamination Detection (Task B)
+    print("\n" + "="*70)
+    print("TASK B:  CONTAMINATION DETECTION (Pb/Cd/Cr)")
+    print("="*70)
     
-    comparison_contaminant = compare_all_methods(
-        data,
-        objective='contaminant',
-        k_features=100
+    comparison_contam = compare_feature_selection_methods(
+        X, y_contaminant, wavelengths, n_features=N_FEATURES, task='contaminant'
     )
     
-    # Visualize
-    plot_feature_comparison(
-        comparison_contaminant,
-        objective='contaminant',
-        wavelengths=data['wavelengths'],
-        save_path='feature_selection_contaminant.png'
+    plot_comparison_dashboard(
+        comparison_contam,
+        save_path='feature_selection_comparison_contaminant.png'
     )
     
-    # Save results
-    save_feature_selection_results(
-        comparison_contaminant,
-        objective='contaminant',
-        output_path='feature_selection_contaminant.npz'
+    generate_comparison_report(
+        comparison_contam,
+        task='contaminant',
+        output_file='feature_selection_report_contaminant.txt'
     )
     
-    # =========================================================================
-    # PHASE 2 COMPLETION SUMMARY
-    # =========================================================================
-    print(f"\n{'='*70}")
-    print("✓ PHASE 2 COMPLETE:  SYSTEMATIC FEATURE SELECTION")
-    print(f"{'='*70}")
-    
-    print("\nNutrient Classification Results:")
-    best_nut = comparison_nutrient[comparison_nutrient['best_method']]
-    print(f"  Best method:        {best_nut['method']}")
-    print(f"  Features selected: {best_nut['n_features']}")
-    print(f"  Test accuracy:     {best_nut['test_accuracy']*100:.2f}%")
-    print(f"  Feature reduction: {(1 - best_nut['n_features']/12981)*100:.2f}%")
-    
-    print("\nContaminant Detection Results:")
-    best_con = comparison_contaminant[comparison_contaminant['best_method']]
-    print(f"  Best method:       {best_con['method']}")
-    print(f"  Features selected: {best_con['n_features']}")
-    print(f"  Test accuracy:     {best_con['test_accuracy']*100:.2f}%")
-    print(f"  Feature reduction: {(1 - best_con['n_features']/12981)*100:.2f}%")
-    
-    print(f"\n{'='*70}")
-    print("NEXT PHASE: MODEL DEVELOPMENT (Phase 3)")
-    print(f"{'='*70}")
-    print("\nPhase 3 Objectives:")
-    print("  1.Train Random Forest with selected features")
-    print("  2.Compare against PLS-DA baseline (73.01%)")
-    print("  3.Optimize hyperparameters (max_depth, n_estimators)")
-    print("  4.Prepare for TinyML deployment (Phase 4)")
-    print("\n  Load feature selection results:")
-    print("    data = np.load('feature_selection_nutrient.npz')")
-    print("    selected_indices = data['selected_indices']")
-    print(f"{'='*70}")
+    print("\n" + "="*70)
+    print("SECTION 4.3 ANALYSIS COMPLETE")
+    print("="*70)
+    print("\nGenerated Files:")
+    print("  - feature_selection_comparison_nutrient.png")
+    print("  - feature_selection_comparison_contaminant.png")
+    print("  - feature_selection_report_nutrient.txt")
+    print("  - feature_selection_report_contaminant.txt")
+    print("\nNext:  Proceed to Section 4.4 (Model Training & Validation)")
+    print("="*70)
